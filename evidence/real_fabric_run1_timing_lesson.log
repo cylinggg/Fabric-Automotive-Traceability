@@ -1,0 +1,63 @@
+### STEP 1: Register target batch BATCH-T (5 components) ###
+-- RegisterComponent COMP-T1 --
+[34m2026-08-13 20:01:42.695 BST 0001 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 
+-- RegisterComponent COMP-T2 --
+[34m2026-08-13 20:01:43.367 BST 0001 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 
+-- RegisterComponent COMP-T3 --
+[34m2026-08-13 20:01:44.036 BST 0001 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 
+-- RegisterComponent COMP-T4 --
+[34m2026-08-13 20:01:44.712 BST 0001 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 
+-- RegisterComponent COMP-T5 --
+[34m2026-08-13 20:01:45.394 BST 0001 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 
+### STEP 2: Register control batch BATCH-C (3 components, should NOT be recalled) ###
+-- RegisterComponent COMP-C1 --
+[34m2026-08-13 20:01:46.074 BST 0001 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 
+-- RegisterComponent COMP-C2 --
+[34m2026-08-13 20:01:46.748 BST 0001 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 
+-- RegisterComponent COMP-C3 --
+[34m2026-08-13 20:01:47.426 BST 0001 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 
+### STEP 3: Full lifecycle for COMP-T1 -> RecordTest -> RecordShipment -> assemble -> deliver ###
+[34m2026-08-13 20:01:48.107 BST 0001 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 
+[34m2026-08-13 20:01:48.780 BST 0001 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 
+-- RecordAssembly should REJECT (component still SHIPPED not the issue; but only 1 comp, status SHIPPED expected pass) --
+Error: endorsement failure during invoke. response: status:500 message:"recordAssembly rejected for component COMP-T1: invalid state transition: token COMP-T1 has status QC_PASSED, expected SHIPPED" 
+-- RecordDelivery PRODUCT-V1 to DealerA (should cascade to COMP-T1) --
+Error: endorsement failure during invoke. response: status:500 message:"no token found for PRODUCT-V1 (GetState returned nil)" 
+-- QUERY COMP-T1 after delivery (owner/status should now be DealerA/DELIVERED, proving cascade fix) --
+{"docType":"component","tokenId":"COMP-T1","batchId":"BATCH-T","status":"SHIPPED","owner":"Tier1Supplier","dataHash":"31ea248f5d35ef58a5b6725ce1b7dd22ad9237a39298d7e933d81eac5603ae26","submittingOrgMspId":"Org1MSP","coAttestingOrgs":["Org1MSP","Org2MSP"],"timestamp":"2026-08-13T19:01:42.671418Z"}
+### STEP 4: Negative case - RecordAssembly on a component that is NOT SHIPPED (COMP-T2 is still MANUFACTURED) ###
+Error: endorsement failure during invoke. response: status:500 message:"recordAssembly rejected for component COMP-T2: invalid state transition: token COMP-T2 has status MANUFACTURED, expected SHIPPED" 
+### STEP 5: Negative case - RecordShipment with wrong fromOwner ###
+[34m2026-08-13 20:01:51.515 BST 0001 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 
+Error: endorsement failure during invoke. response: status:500 message:"invalid state transition: token COMP-T3 has status MANUFACTURED, expected QC_PASSED" 
+### STEP 6: Warranty scenario - usage log + check (two cases) ###
+[34m2026-08-13 20:01:52.864 BST 0001 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 
+[34m2026-08-13 20:01:53.544 BST 0001 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 
+Error: endorsement failure during query. response: status:500 message:"no usage log recorded for COMP-T4" 
+[34m2026-08-13 20:01:54.236 BST 0001 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 
+-- expect fail: COMP-T5 never RegisterComponent'd test/usage before check consistency n/a --
+Error: endorsement failure during query. response: status:500 message:"no usage log recorded for COMP-T5" 
+### STEP 7: CounterfeitScan - genuine vs fabricated ID ###
+{"coAttestingOrgs":["Org1MSP","Org2MSP"],"componentId":"COMP-T1","note":"confirms ledger registration and declared co-attestation only; does not by itself prove the physical item being scanned is the genuine, unaltered original","registeredOnLedger":true,"result":"REGISTERED_WITH_SUFFICIENT_ATTESTATION","status":"SHIPPED"}
+{"componentId":"COMP-FAKE-9999","registeredOnLedger":false,"result":"NOT_FOUND"}
+### STEP 8: Negative case - unauthorized TriggerRecall caller (Org2 = Tier1Supplier, not OEM/Regulator) ###
+Error: endorsement failure during invoke. response: status:500 message:"triggerRecall rejected: caller org must be OEM or Regulator, got Org2MSP" 
+### STEP 9: Authorized TriggerRecall by Org1 (OEM) on BATCH-T only ###
+[34m2026-08-13 20:01:55.712 BST 0001 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 payload:"{\"affectedCount\":5,\"batchId\":\"BATCH-T\",\"notifiedOwners\":[\"Tier1Supplier\",\"Tier2Supplier\"],\"txId\":\"016c51fe904b16d99841a0275e6284c627d689c1b4af5e89ac3647c604e697bf\"}" 
+### STEP 10: Verify control batch BATCH-C untouched ###
+{"docType":"component","tokenId":"COMP-C1","batchId":"BATCH-C","status":"MANUFACTURED","owner":"Tier2Supplier","dataHash":"fabdf522843bb40484671c61d058e7b8e91e1018504f79f72efa9b3e1f019501","submittingOrgMspId":"Org1MSP","coAttestingOrgs":["Org1MSP","Org2MSP"],"timestamp":"2026-08-13T19:01:46.067946Z"}
+{"docType":"component","tokenId":"COMP-C2","batchId":"BATCH-C","status":"MANUFACTURED","owner":"Tier2Supplier","dataHash":"789641d694c328511ce1d51ac7a5edd29f5469ab5ee2b4acd24cd2ba48afbbf3","submittingOrgMspId":"Org1MSP","coAttestingOrgs":["Org1MSP","Org2MSP"],"timestamp":"2026-08-13T19:01:46.736552Z"}
+{"docType":"component","tokenId":"COMP-C3","batchId":"BATCH-C","status":"MANUFACTURED","owner":"Tier2Supplier","dataHash":"7e0c61f818dcd046ca283ceef03afbf41d8645fad5a9731cc20ba7252292b045","submittingOrgMspId":"Org1MSP","coAttestingOrgs":["Org1MSP","Org2MSP"],"timestamp":"2026-08-13T19:01:47.418519Z"}
+### STEP 11: Verify all BATCH-T components now RECALLED ###
+{"docType":"component","tokenId":"COMP-T1","batchId":"BATCH-T","status":"SHIPPED","owner":"Tier1Supplier","dataHash":"31ea248f5d35ef58a5b6725ce1b7dd22ad9237a39298d7e933d81eac5603ae26","submittingOrgMspId":"Org1MSP","coAttestingOrgs":["Org1MSP","Org2MSP"],"timestamp":"2026-08-13T19:01:42.671418Z"}
+{"docType":"component","tokenId":"COMP-T2","batchId":"BATCH-T","status":"MANUFACTURED","owner":"Tier2Supplier","dataHash":"42fb9ff39d4ba0bd4fa80f74525348bb534bc1bde2afd3fa7be9d3a536e89099","submittingOrgMspId":"Org1MSP","coAttestingOrgs":["Org1MSP","Org2MSP"],"timestamp":"2026-08-13T19:01:43.35921Z"}
+{"docType":"component","tokenId":"COMP-T3","batchId":"BATCH-T","status":"QC_PASSED","owner":"Tier2Supplier","dataHash":"94ecae61f76c709d1e578042d7d367a5ec32fb6e42959bfdfeee9d0ee73503f9","submittingOrgMspId":"Org1MSP","coAttestingOrgs":["Org1MSP","Org2MSP"],"timestamp":"2026-08-13T19:01:44.028567Z"}
+{"docType":"component","tokenId":"COMP-T4","batchId":"BATCH-T","status":"QC_PASSED","owner":"Tier2Supplier","dataHash":"94ecae61f76c709d1e578042d7d367a5ec32fb6e42959bfdfeee9d0ee73503f9","submittingOrgMspId":"Org1MSP","coAttestingOrgs":["Org1MSP","Org2MSP"],"timestamp":"2026-08-13T19:01:44.70352Z","usageAvgTempC":92}
+{"docType":"component","tokenId":"COMP-T5","batchId":"BATCH-T","status":"MANUFACTURED","owner":"Tier2Supplier","dataHash":"8f213058d83c8ff52b318f993913af3163fcc36ceae412baed01ed6d055654b2","submittingOrgMspId":"Org1MSP","coAttestingOrgs":["Org1MSP","Org2MSP"],"timestamp":"2026-08-13T19:01:45.386332Z","usageAvgTempC":78}
+### STEP 12: Negative case - TriggerRecall on unknown batch ###
+Error: endorsement failure during invoke. response: status:500 message:"triggerRecall rejected: no components found for batch BATCH-DOES-NOT-EXIST" 
+### STEP 13: CloseRecall on one recalled component ###
+Error: endorsement failure during invoke. response: status:500 message:"invalid state transition: token COMP-T1 has status SHIPPED, expected RECALLED" 
+### STEP 14: GetHistory for COMP-T1 (full audit trail) ###
+[{"txId":"016c51fe904b16d99841a0275e6284c627d689c1b4af5e89ac3647c604e697bf","timestamp":"2026-08-13T19:01:55Z","isDelete":false,"value":{"docType":"component","tokenId":"COMP-T1","batchId":"BATCH-T","status":"RECALLED","owner":"Tier1Supplier","dataHash":"31ea248f5d35ef58a5b6725ce1b7dd22ad9237a39298d7e933d81eac5603ae26","submittingOrgMspId":"Org1MSP","coAttestingOrgs":["Org1MSP","Org2MSP"],"timestamp":"2026-08-13T19:01:42.671418Z","reason":"engine mount torque spec deviation"}},{"txId":"53a9c8d93c5c90165d54f248365e28f0b4548865a1cc037e9b0e758731819603","timestamp":"2026-08-13T19:01:48Z","isDelete":false,"value":{"docType":"component","tokenId":"COMP-T1","batchId":"BATCH-T","status":"SHIPPED","owner":"Tier1Supplier","dataHash":"31ea248f5d35ef58a5b6725ce1b7dd22ad9237a39298d7e933d81eac5603ae26","submittingOrgMspId":"Org1MSP","coAttestingOrgs":["Org1MSP","Org2MSP"],"timestamp":"2026-08-13T19:01:42.671418Z"}},{"txId":"81445dcf0d0825045032419e776bb3e58f22fdfb4251b75d3166a7a1a6505918","timestamp":"2026-08-13T19:01:48Z","isDelete":false,"value":{"docType":"component","tokenId":"COMP-T1","batchId":"BATCH-T","status":"QC_PASSED","owner":"Tier2Supplier","dataHash":"31ea248f5d35ef58a5b6725ce1b7dd22ad9237a39298d7e933d81eac5603ae26","submittingOrgMspId":"Org1MSP","coAttestingOrgs":["Org1MSP","Org2MSP"],"timestamp":"2026-08-13T19:01:42.671418Z"}},{"txId":"c1efcac343329e4a50b1635e14afafede1becae912d1c50a0ab5bd3b990c28f5","timestamp":"2026-08-13T19:01:42Z","isDelete":false,"value":{"docType":"component","tokenId":"COMP-T1","batchId":"BATCH-T","status":"MANUFACTURED","owner":"Tier2Supplier","dataHash":"ca9d6d753a4c5a0acede6d9ed9c223af3afe6fe5f893a4cd25fa5f336b31413e","submittingOrgMspId":"Org1MSP","coAttestingOrgs":["Org1MSP","Org2MSP"],"timestamp":"2026-08-13T19:01:42.671418Z"}}]
+### DONE ###

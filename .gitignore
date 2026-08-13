@@ -1,0 +1,5 @@
+*.tar.gz
+honda-chaincode-new
+component_traceability
+*.log.tmp
+.DS_Store

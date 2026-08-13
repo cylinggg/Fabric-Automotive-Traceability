@@ -1,0 +1,42 @@
+### RUN2 STEP A: Register + fully cycle COMP-B1..COMP-B3 to SHIPPED (with proper commit wait) ###
+-- RegisterComponent COMP-B1 --
+[34m2026-08-13 20:02:58.043 BST 0001 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 
+-- RecordTest COMP-B1 --
+[34m2026-08-13 20:03:01.126 BST 0001 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 
+-- RecordShipment COMP-B1 --
+[34m2026-08-13 20:03:04.204 BST 0001 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 
+-- RegisterComponent COMP-B2 --
+[34m2026-08-13 20:03:07.283 BST 0001 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 
+-- RecordTest COMP-B2 --
+[34m2026-08-13 20:03:10.366 BST 0001 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 
+-- RecordShipment COMP-B2 --
+[34m2026-08-13 20:03:13.452 BST 0001 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 
+-- RegisterComponent COMP-B3 --
+[34m2026-08-13 20:03:16.528 BST 0001 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 
+-- RecordTest COMP-B3 --
+[34m2026-08-13 20:03:19.602 BST 0001 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 
+-- RecordShipment COMP-B3 --
+[34m2026-08-13 20:03:22.680 BST 0001 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 
+### RUN2 STEP B: RecordAssembly PRODUCT-B (3 components, same batch) ###
+[34m2026-08-13 20:03:25.761 BST 0001 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 
+-- QUERY PRODUCT-B --
+{"docType":"product","tokenId":"PRODUCT-B","batchId":"BATCH-B","recipeId":"RECIPE-STD","status":"ASSEMBLED","owner":"Org1MSP","submittingOrgMspId":"Org1MSP","coAttestingOrgs":["Org1MSP","Org2MSP"],"timestamp":"2026-08-13T19:03:25.750927Z","components":["COMP-B1","COMP-B2","COMP-B3"]}
+### RUN2 STEP C: RecordDelivery PRODUCT-B to DealerB (should cascade to all 3 components) ###
+[34m2026-08-13 20:03:28.889 BST 0001 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 
+-- QUERY COMP-B1 after delivery (expect owner=DealerB, status=DELIVERED) --
+{"docType":"component","tokenId":"COMP-B1","batchId":"BATCH-B","status":"DELIVERED","owner":"DealerB","dataHash":"0fcae2fea7056d815b73f7750c4634f0352a053ce9b55de04002494b56ad0219","submittingOrgMspId":"Org1MSP","coAttestingOrgs":["Org1MSP","Org2MSP"],"timestamp":"2026-08-13T19:02:58.025841Z"}
+-- QUERY COMP-B2 after delivery --
+{"docType":"component","tokenId":"COMP-B2","batchId":"BATCH-B","status":"DELIVERED","owner":"DealerB","dataHash":"040f83e56d4c09b1d52a19b856671d268439761f2fb19a88c9c64025340d6bc0","submittingOrgMspId":"Org1MSP","coAttestingOrgs":["Org1MSP","Org2MSP"],"timestamp":"2026-08-13T19:03:07.273734Z"}
+-- QUERY COMP-B3 after delivery --
+{"docType":"component","tokenId":"COMP-B3","batchId":"BATCH-B","status":"DELIVERED","owner":"DealerB","dataHash":"9c65a4880cc3744cfc9cda52091c18e6871308abd39cbc475d251ae57ece60b6","submittingOrgMspId":"Org1MSP","coAttestingOrgs":["Org1MSP","Org2MSP"],"timestamp":"2026-08-13T19:03:16.521885Z"}
+### RUN2 STEP D: Negative - duplicate assembly (PRODUCT-B already exists) ###
+Error: endorsement failure during invoke. response: status:500 message:"recordAssembly rejected: product PRODUCT-B is already registered" 
+### RUN2 STEP E: CloseRecall path - first recall BATCH-B, then close COMP-B1 ###
+[34m2026-08-13 20:03:35.158 BST 0001 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 payload:"{\"affectedCount\":4,\"batchId\":\"BATCH-B\",\"notifiedOwners\":[\"DealerB\"],\"txId\":\"b15c1f803c39105f93170d20d83499cfe162359eaddeff028857c8e50bf21eec\"}" 
+{"docType":"component","tokenId":"COMP-B1","batchId":"BATCH-B","status":"RECALLED","owner":"DealerB","dataHash":"0fcae2fea7056d815b73f7750c4634f0352a053ce9b55de04002494b56ad0219","submittingOrgMspId":"Org1MSP","coAttestingOrgs":["Org1MSP","Org2MSP"],"timestamp":"2026-08-13T19:02:58.025841Z","reason":"seatbelt tensioner fault"}
+[34m2026-08-13 20:03:38.270 BST 0001 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 payload:"{\"componentId\":\"COMP-B1\",\"newStatus\":\"REPAIRED\",\"txId\":\"a14812bdffb31c864f64e2c235a7fbebfe23c4b01b58a0d44df1995a0cd95839\"}" 
+{"docType":"component","tokenId":"COMP-B1","batchId":"BATCH-B","status":"REPAIRED","owner":"DealerB","dataHash":"0fcae2fea7056d815b73f7750c4634f0352a053ce9b55de04002494b56ad0219","submittingOrgMspId":"Org1MSP","coAttestingOrgs":["Org1MSP","Org2MSP"],"timestamp":"2026-08-13T19:02:58.025841Z","reason":"seatbelt tensioner fault","reasonHistory":["CLOSED(REPAIRED): dealer repaired tensioner [tx:a14812bdffb31c864f64e2c235a7fbebfe23c4b01b58a0d44df1995a0cd95839]"]}
+### RUN2 STEP F: ReviseRecallReason on BATCH-B (amend, not overwrite) ###
+[34m2026-08-13 20:03:41.394 BST 0001 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 payload:"{\"amendedCount\":3,\"batchId\":\"BATCH-B\",\"txId\":\"beaf76313713ee5ce335cc3fa944be7d36ce1a9018a232dfd987a4e93cee7cec\"}" 
+{"docType":"component","tokenId":"COMP-B2","batchId":"BATCH-B","status":"RECALLED","owner":"DealerB","dataHash":"040f83e56d4c09b1d52a19b856671d268439761f2fb19a88c9c64025340d6bc0","submittingOrgMspId":"Org1MSP","coAttestingOrgs":["Org1MSP","Org2MSP"],"timestamp":"2026-08-13T19:03:07.273734Z","reason":"seatbelt tensioner fault","reasonHistory":["AMENDED by Org1MSP: root cause confirmed as torque spec, not tensioner [tx:beaf76313713ee5ce335cc3fa944be7d36ce1a9018a232dfd987a4e93cee7cec]"]}
+### DONE RUN2 ###
