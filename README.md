@@ -40,27 +40,56 @@ manufacturer.
   directly from `peer chaincode invoke`/`query` against a running
   network (org peers, orderer, and two CouchDB instances), not from any
   simulator.
+- `chaincode/component_traceability_test.go` — Go unit tests (`go test
+  ./...`, no Docker or live network required) covering the business logic
+  that does not need a real peer to verify: real-SHA-256 hashing,
+  duplicate-ID rejection, insufficient-co-attestation rejection, invalid
+  state-transition rejection, deterministic sorted co-attestation
+  ordering, unauthorised-caller rejection, and unknown-batch rejection.
+  These are unit tests against a hand-rolled in-memory fake of the
+  `ChaincodeStubInterface`/`ClientIdentity` methods this chaincode
+  actually calls; they check the same logic the real-network evidence in
+  `evidence/` also exercises, but faster and without infrastructure. They
+  do **not** replace that real-network evidence — a unit test cannot
+  observe real multi-peer endorsement, MVCC conflicts, or the
+  asynchronous-commit behaviour documented in `evidence/`.
+- `simulator/traceability-simulator.html` — the self-contained,
+  browser-based JavaScript behavioural simulator referenced in the
+  dissertation's Methodology chapter as historical/development-phase
+  evidence (open the file directly in a browser; no build step or server
+  required). Its results are superseded wherever both exist by the real
+  Fabric evidence in `evidence/`.
+- `network-config/README.md` — which parts of the deployment are the
+  unmodified `fabric-samples/test-network`, the exact `peer lifecycle
+  chaincode commit` invocation used, and an explicit note that this
+  project relied on Fabric's default majority endorsement policy for a
+  2-org channel rather than a hand-authored policy string (a plainly
+  stated limitation, not glossed over).
+- `couchdb-indexes/index-batchId-status.json` — the CouchDB index
+  definition for ad hoc, read-only audit queries over `batchId`/`status`
+  (in the standard `META-INF/statedb/couchdb/indexes/` chaincode-package
+  location). `TriggerRecall` itself no longer depends on a CouchDB rich
+  query (see the composite-key index discussion in the dissertation), but
+  CouchDB remains the peer state database and this index keeps ad hoc
+  dashboard-style queries efficient.
 
 ## What this repo does *not* include
 
 - A packaged Fabric network (crypto material, `docker-compose` files,
-  channel artifacts). It was deployed against the standard 2-org
+  channel genesis artifacts). It was deployed against the standard 2-org
   `test-network` from
   [`hyperledger/fabric-samples`](https://github.com/hyperledger/fabric-samples),
-  unmodified, started with `./network.sh up createChannel -s couchdb`.
+  unmodified, started with `./network.sh up createChannel -s couchdb`;
+  crypto material is generated fresh per deployment and is not something
+  that should ever be committed to a repository.
 - A `RegulatorMSP` organisation. The reference `test-network` only
   provisions two peer organisations (`Org1MSP`, `Org2MSP`); the chaincode
   assigns `Org1MSP` the OEM role and reserves `Org3MSP` for a regulator
   role that was never deployed. Functions gated to `Org3MSP` only
-  (`RevokeRecall`) are implemented and unit-reasoned about but were not
+  (`RevokeRecall`) are implemented and unit-tested but were not
   exercised against a live network in this evidence set — see the
-  dissertation's Scenario Analysis for the honest real/not-yet-tested
-  split.
-- The earlier JavaScript behavioural simulator referenced in prior
-  drafts of the dissertation. That simulator was used only until a real
-  network became available in this environment; once it did, the
-  simulator's results were superseded by real deployment and are no
-  longer the dissertation's primary evidence.
+  dissertation's Scenario Analysis and Limitations for the honest
+  real/not-yet-tested split.
 
 ## Reproducing the evidence logs
 

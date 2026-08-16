@@ -1,0 +1,498 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Honda Fabric Chaincode Simulator</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#14171A;
+    --panel:#1C2126;
+    --panel-2:#22282E;
+    --line:#31383F;
+    --text:#ECEFF1;
+    --muted:#8B959E;
+    --honda-red:#E4002B;
+    --honda-red-dim:#5c1220;
+    --verified:#00C2A0;
+    --verified-dim:#0f3c34;
+    --warn:#E8A33D;
+    --font-display:'Space Grotesk',sans-serif;
+    --font-body:'Inter',sans-serif;
+    --font-mono:'IBM Plex Mono',monospace;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font-family:var(--font-body); font-size:14px;
+    min-height:100vh;
+  }
+  .app{ display:flex; flex-direction:column; min-height:100vh; }
+
+  header{
+    padding:20px 24px 16px; border-bottom:1px solid var(--line);
+    display:flex; align-items:baseline; justify-content:space-between; gap:16px; flex-wrap:wrap;
+  }
+  header .title{ font-family:var(--font-display); font-weight:700; font-size:20px; letter-spacing:.2px; }
+  header .title span{ color:var(--honda-red); }
+  header .subtitle{ color:var(--muted); font-size:12.5px; margin-top:4px; }
+  header .badge{
+    font-family:var(--font-mono); font-size:11px; color:var(--verified);
+    border:1px solid var(--verified-dim); background:var(--verified-dim);
+    padding:4px 9px; border-radius:3px; white-space:nowrap;
+  }
+
+  .layout{ display:grid; grid-template-columns:250px 1fr 300px; gap:1px; background:var(--line); flex:1; min-height:0;}
+  .panel{ background:var(--panel); padding:16px; overflow-y:auto; }
+  .panel h2{
+    font-family:var(--font-display); font-size:11px; letter-spacing:1px; text-transform:uppercase;
+    color:var(--muted); margin:0 0 12px;
+  }
+
+  /* --- left: identity + actions --- */
+  .org-select{ margin-bottom:20px; }
+  select{
+    width:100%; background:var(--panel-2); color:var(--text); border:1px solid var(--line);
+    padding:8px 10px; border-radius:4px; font-family:var(--font-mono); font-size:12px;
+  }
+  .action-group{ margin-bottom:18px; }
+  .action-group .glabel{ font-size:11px; color:var(--muted); margin-bottom:6px; text-transform:uppercase; letter-spacing:.5px;}
+  button.act{
+    display:block; width:100%; text-align:left; background:var(--panel-2); color:var(--text);
+    border:1px solid var(--line); padding:9px 10px; border-radius:4px; margin-bottom:6px;
+    font-family:var(--font-body); font-size:12.5px; cursor:pointer; transition:border-color .15s, background .15s;
+  }
+  button.act:hover{ border-color:var(--verified); background:#1f2a28; }
+  button.act.danger:hover{ border-color:var(--honda-red); background:#2a1a1e; }
+  button.act:disabled{ opacity:.35; cursor:not-allowed; }
+  button.act .k{ color:var(--muted); font-family:var(--font-mono); font-size:10.5px; }
+
+  /* --- center: chain + log --- */
+  .center{ display:flex; flex-direction:column; min-height:0; }
+  .chain-scroll{ overflow-x:auto; padding-bottom:10px; border-bottom:1px solid var(--line); margin-bottom:12px; flex-shrink:0; }
+  .chain{ display:flex; align-items:stretch; gap:0; min-height:92px; }
+  .block{
+    flex:0 0 auto; width:150px; border:1px solid var(--line); border-radius:6px; background:var(--panel-2);
+    padding:9px 10px; margin-right:18px; position:relative; font-family:var(--font-mono);
+  }
+  .block::after{
+    content:'→'; position:absolute; right:-17px; top:50%; transform:translateY(-50%);
+    color:var(--muted); font-size:14px;
+  }
+  .block:last-child::after{ content:''; }
+  .block.tx-registerComponent{ border-color:#2a4a6b; }
+  .block.tx-triggerRecall{ border-color:var(--honda-red); box-shadow:0 0 0 1px var(--honda-red-dim); }
+  .block.tx-recordShipment,.block.tx-recordAssembly,.block.tx-recordDelivery,.block.tx-recordUsageLog,.block.tx-recordTest{ border-color:#3a4550; }
+  .block .bi{ font-size:10px; color:var(--muted); }
+  .block .bt{ font-size:11.5px; color:var(--text); margin:3px 0; font-family:var(--font-display); font-weight:600;}
+  .block .bh{ font-size:9.5px; color:var(--verified); word-break:break-all; margin-top:6px;}
+
+  .log{ flex:1; overflow-y:auto; font-family:var(--font-mono); font-size:12px; line-height:1.65; }
+  .log .entry{ padding:7px 0; border-bottom:1px dashed var(--line); }
+  .log .entry .tag{
+    display:inline-block; font-size:9.5px; padding:1px 6px; border-radius:3px; margin-right:8px;
+    background:var(--panel-2); color:var(--muted); border:1px solid var(--line);
+  }
+  .log .entry.ok .tag{ color:var(--verified); border-color:var(--verified-dim); }
+  .log .entry.err .tag{ color:var(--honda-red); border-color:var(--honda-red-dim); }
+  .log .entry .msg{ color:var(--text); }
+  .log .entry .msg b{ color:var(--verified); font-weight:600; }
+  .log .entry .msg em{ color:var(--honda-red); font-style:normal; }
+
+  /* --- right: world state --- */
+  .stat-row{ display:flex; justify-content:space-between; padding:5px 0; font-family:var(--font-mono); font-size:12px; border-bottom:1px solid var(--line); }
+  .stat-row .v{ color:var(--verified); }
+  table{ width:100%; border-collapse:collapse; margin-top:14px; font-family:var(--font-mono); font-size:11px; }
+  th{ text-align:left; color:var(--muted); font-weight:500; padding:5px 4px; border-bottom:1px solid var(--line); font-size:10px; text-transform:uppercase; letter-spacing:.4px;}
+  td{ padding:5px 4px; border-bottom:1px solid #262c32; color:var(--text); }
+  .status-pill{ padding:1px 6px; border-radius:3px; font-size:10px; }
+  .status-MANUFACTURED{ background:#2a2f36; color:var(--muted); }
+  .status-QC_PASSED,.status-SHIPPED,.status-ASSEMBLED,.status-DELIVERED{ background:var(--verified-dim); color:var(--verified); }
+  .status-RECALLED{ background:var(--honda-red-dim); color:var(--honda-red); }
+
+  footer{ padding:10px 24px; border-top:1px solid var(--line); color:var(--muted); font-size:11px; font-family:var(--font-mono); }
+
+  ::-webkit-scrollbar{ height:8px; width:8px; }
+  ::-webkit-scrollbar-thumb{ background:var(--line); border-radius:4px; }
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <div>
+      <div class="title">Honda <span>Fabric</span> Chaincode Simulator</div>
+      <div class="subtitle">Execute → Order → Validate, modeled from the chaincode design (registerComponent / triggerRecall) &nbsp;·&nbsp; in-memory, hash-linked block ledger</div>
+    </div>
+    <div class="badge">● world-state: CouchDB-style JSON docs (simulated)</div>
+  </header>
+
+  <div class="layout">
+    <div class="panel" id="leftPanel">
+      <div class="org-select">
+        <h2>Caller identity (MSP)</h2>
+        <select id="orgSelect">
+          <option value="Tier1SupplierMSP">Tier1SupplierMSP</option>
+          <option value="Tier2SupplierMSP">Tier2SupplierMSP</option>
+          <option value="HondaOEM_MSP">HondaOEM_MSP</option>
+          <option value="RegulatorMSP">RegulatorMSP</option>
+          <option value="DealerMSP">DealerMSP</option>
+        </select>
+      </div>
+
+      <div class="action-group">
+        <div class="glabel">01 · Execute (Endorsement)</div>
+        <button class="act" id="btnRegister">Register component<br><span class="k">registerComponent() · needs ≥2 orgs</span></button>
+        <button class="act" id="btnShip">Ship to dealer<br><span class="k">recordShipment()</span></button>
+        <button class="act" id="btnUsage">Log usage (temp)<br><span class="k">recordUsageLog()</span></button>
+      </div>
+
+      <div class="action-group">
+        <div class="glabel">02 · Scenario</div>
+        <button class="act danger" id="btnRecall">Trigger recall<br><span class="k">triggerRecall() · Honda/Regulator only</span></button>
+        <button class="act" id="btnWarranty">Check warranty<br><span class="k">warrantyCheck() · >85°C = user fault</span></button>
+        <button class="act" id="btnCounterfeit">Scan for counterfeit<br><span class="k">counterfeitScan()</span></button>
+      </div>
+
+      <div class="action-group">
+        <div class="glabel">03 · Recall lifecycle</div>
+        <button class="act" id="btnClose">Close recall (repair)<br><span class="k">closeRecall() · needs ≥2 orgs</span></button>
+        <button class="act" id="btnRevise">Amend recall reason<br><span class="k">reviseRecallReason() · Honda/Regulator</span></button>
+        <button class="act danger" id="btnRevoke">Revoke recall<br><span class="k">revokeRecall() · Regulator ONLY</span></button>
+        <button class="act" id="btnHistory">View full history<br><span class="k">getHistory() · block# + tx hash</span></button>
+      </div>
+
+      <div class="action-group">
+        <div class="glabel">04 · Reset</div>
+        <button class="act" id="btnSeed">Re-seed demo batch<br><span class="k">registers 12 fresh components</span></button>
+      </div>
+    </div>
+
+    <div class="panel center">
+      <h2>Block ledger</h2>
+      <div class="chain-scroll"><div class="chain" id="chain"></div></div>
+      <h2>Transaction log</h2>
+      <div class="log" id="log"></div>
+    </div>
+
+    <div class="panel" id="rightPanel">
+      <h2>Ledger stats</h2>
+      <div class="stat-row"><span>Blocks committed</span><span class="v" id="statBlocks">0</span></div>
+      <div class="stat-row"><span>Tokens (world state)</span><span class="v" id="statTokens">0</span></div>
+      <div class="stat-row"><span>Events emitted</span><span class="v" id="statEvents">0</span></div>
+      <h2 style="margin-top:16px;">World state</h2>
+      <table>
+        <thead><tr><th>ID</th><th>Batch</th><th>Status</th><th>Owner</th></tr></thead>
+        <tbody id="stateTable"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <footer>Behavioral simulation of the chaincode logic in the deck — not a live Fabric network (no Docker in this environment).</footer>
+</div>
+
+<script>
+// ---------- minimal sync hash (browser demo; not cryptographically hardened) ----------
+function hashStr(str){
+  let h1 = 0xdeadbeef ^ 0, h2 = 0x41c6ce57 ^ 0;
+  for (let i = 0; i < str.length; i++) {
+    const ch = str.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1>>>16), 2246822507) ^ Math.imul(h2 ^ (h2>>>13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2>>>16), 2246822507) ^ Math.imul(h1 ^ (h1>>>13), 3266489909);
+  const combined = (4294967296 * (2097151 & h2) + (h1>>>0)).toString(16);
+  return combined.padStart(16,'0') + combined.split('').reverse().join('');
+}
+
+// ---------- chaincode engine (ports fabric-sim-core.js logic to the browser) ----------
+const ORGS = { TIER1:'Tier1SupplierMSP', TIER2:'Tier2SupplierMSP', HONDA:'HondaOEM_MSP', REGULATOR:'RegulatorMSP', DEALER:'DealerMSP' };
+const state = new Map();
+const blocks = [{ index:0, txID:'GENESIS', type:'GENESIS', prevHash:'0'.repeat(16), hash: hashStr('GENESIS') }];
+const events = [];
+let txSeq = 0;
+
+function requireEndorsement(orgs, { minOrgs=0, allowedOrgs=null } = {}){
+  const set = Array.from(new Set(orgs));
+  if (minOrgs && set.length < minOrgs) throw new Error(`Endorsement policy failed: needs ≥${minOrgs} orgs, got ${set.length}`);
+  if (allowedOrgs && !set.some(o=>allowedOrgs.includes(o))) throw new Error(`Endorsement policy failed: caller must be one of [${allowedOrgs.join(', ')}]`);
+  return set;
+}
+function commit(type, data, endorsers){
+  txSeq++;
+  const txID = 'tx' + String(txSeq).padStart(5,'0');
+  const prev = blocks[blocks.length-1];
+  const payload = { txID, type, data, endorsers, ts: Date.now() };
+  const hash = hashStr(prev.hash + JSON.stringify(payload));
+  const block = { index: blocks.length, prevHash: prev.hash, hash, ...payload };
+  blocks.push(block);
+  return block;
+}
+function emit(name, payload){ events.push({name, payload}); }
+
+function registerComponent(componentID, batchID, supplierID, endorsingOrgs){
+  requireEndorsement(endorsingOrgs, {minOrgs:2});
+  if (state.has(componentID)) throw new Error(`${componentID} already registered`);
+  const token = { token_id:componentID, batch_id:batchID, status:'MANUFACTURED', owner:supplierID,
+    org_signature: endorsingOrgs.join('+'), data_hash: hashStr(componentID+Date.now()).slice(0,12), history:[] };
+  state.set(componentID, token);
+  const block = commit('registerComponent', {componentID,batchID}, endorsingOrgs);
+  token.history.push({event:'MANUFACTURED', block:block.index, txID:block.txID});
+  emit('ComponentRegistered', {componentID});
+  return {token, block};
+}
+function recordShipment(componentID, toOrg, endorsingOrgs){
+  requireEndorsement(endorsingOrgs, {minOrgs:2});
+  const token = mustGet(componentID); token.owner = toOrg; token.status = 'SHIPPED';
+  const block = commit('recordShipment', {componentID,toOrg}, endorsingOrgs);
+  token.history = token.history || [];
+  token.history.push({event:'SHIPPED', block:block.index, txID:block.txID, to:toOrg});
+  emit('ShipmentRecorded', {componentID});
+  return {token, block};
+}
+function recordUsageLog(componentID, avgTempC, endorsingOrgs){
+  requireEndorsement(endorsingOrgs, {minOrgs:2});
+  const token = mustGet(componentID); token.usage_log = { avg_temp_c: avgTempC };
+  const block = commit('recordUsageLog', {componentID,avgTempC}, endorsingOrgs);
+  return {token, block};
+}
+function triggerRecall(batchID, reason, callerOrg){
+  requireEndorsement([callerOrg], {allowedOrgs:[ORGS.HONDA, ORGS.REGULATOR]});
+  const affected = [];
+  for (const [key, doc] of state.entries()){
+    if (doc.batch_id === batchID && doc.status !== 'RECALLED'){
+      doc.status = 'RECALLED'; doc.reason = reason; affected.push(key);
+    }
+  }
+  const block = commit('triggerRecall', {batchID, reason, affected: affected.length}, [callerOrg]);
+  for (const key of affected){
+    const doc = state.get(key);
+    doc.history = doc.history || [];
+    doc.history.push({event:'RECALLED', block:block.index, txID:block.txID, note:reason});
+    emit('RecallAlert', {componentID:key, owner:doc.owner, txID:block.txID});
+  }
+  const dealers = new Set(affected.map(id=>state.get(id).owner));
+  return { affected_count: affected.length, notified: Array.from(dealers), block };
+}
+function warrantyCheck(componentID, threshold=85){
+  const token = mustGet(componentID);
+  if (!token.usage_log) throw new Error(`no usage_log for ${componentID} — log usage first`);
+  const over = token.usage_log.avg_temp_c > threshold;
+  return { avg:token.usage_log.avg_temp_c, threshold, fault: over?'USER':'MANUFACTURER', result: over?'WARRANTY_VOID':'WARRANTY_HONORED' };
+}
+function closeRecall(componentID, resolution, note, endorsingOrgs){
+  requireEndorsement(endorsingOrgs, {minOrgs:2});
+  const token = mustGet(componentID);
+  if (token.status !== 'RECALLED') throw new Error(`${componentID} is not RECALLED (status=${token.status})`);
+  if (!['REPAIRED','REPLACED','RETIRED'].includes(resolution)) throw new Error(`resolution must be REPAIRED/REPLACED/RETIRED`);
+  token.status = resolution;
+  token.history = token.history || [];
+  const block = commit('closeRecall', {componentID, resolution, note}, endorsingOrgs);
+  token.history.push({event:`CLOSED(${resolution})`, block:block.index, txID:block.txID, note});
+  emit('RecallClosed', {componentID, resolution});
+  return {token, block};
+}
+function reviseRecallReason(batchID, amendedReason, callerOrg){
+  requireEndorsement([callerOrg], {allowedOrgs:[ORGS.HONDA, ORGS.REGULATOR]});
+  const targets = Array.from(state.entries()).filter(([,d])=>d.batch_id===batchID && d.status==='RECALLED');
+  const block = commit('reviseRecallReason', {batchID, amendedReason, count:targets.length}, [callerOrg]);
+  for(const [,doc] of targets){
+    doc.history = doc.history || [];
+    doc.history.push({event:'REASON_AMENDED', block:block.index, txID:block.txID, note:amendedReason});
+  }
+  return { amended_count: targets.length, block };
+}
+function revokeRecall(batchID, justification, callerOrg){
+  requireEndorsement([callerOrg], {allowedOrgs:[ORGS.REGULATOR]});
+  const targets = Array.from(state.entries()).filter(([,d])=>d.batch_id===batchID && d.status==='RECALLED');
+  const block = commit('revokeRecall', {batchID, justification, count:targets.length}, [callerOrg]);
+  for(const [,doc] of targets){
+    doc.status = 'ACTIVE';
+    doc.history = doc.history || [];
+    doc.history.push({event:'REVOKED', block:block.index, txID:block.txID, note:justification});
+  }
+  return { revoked_count: targets.length, block };
+}
+function getHistory(componentID){
+  const token = mustGet(componentID);
+  return (token.history||[]).map(h => {
+    const b = blocks[h.block];
+    return { ...h, blockHash: b ? b.hash : null };
+  });
+}
+function counterfeitScan(componentID){
+  const token = state.get(componentID);
+  if (!token) return { result:'NOT_FOUND', reason:'no token on ledger' };
+  const signers = (token.org_signature||'').split('+').filter(Boolean);
+  return { result: signers.length>=2 ? 'AUTHENTIC' : 'SUSPECT', org_signature: token.org_signature };
+}
+function mustGet(id){ const t = state.get(id); if(!t) throw new Error(`GetState(${id}) returned nil`); return t; }
+
+// ---------- UI wiring ----------
+const $ = (id)=>document.getElementById(id);
+const logEl = $('log'), chainEl = $('chain');
+let componentSeq = 0, dealerCycle = ['Dealer-Manchester','Dealer-Bristol','Dealer-Leeds','Dealer-Glasgow'];
+let dealerIdx = 0;
+const ACTIVE_BATCH = 'BATCH-2024-BRK-119';
+
+function logMsg(ok, tag, html){
+  const div = document.createElement('div');
+  div.className = 'entry ' + (ok?'ok':'err');
+  div.innerHTML = `<span class="tag">${tag}</span><span class="msg">${html}</span>`;
+  logEl.prepend(div);
+}
+
+function renderChain(){
+  chainEl.innerHTML = blocks.slice(1).slice(-14).map(b=>`
+    <div class="block tx-${b.type}">
+      <div class="bi">#${b.index}</div>
+      <div class="bt">${b.type}</div>
+      <div class="bi">${b.txID}</div>
+      <div class="bh">${b.hash.slice(0,14)}…</div>
+    </div>`).join('');
+  chainEl.scrollLeft = chainEl.scrollWidth;
+}
+function renderState(){
+  $('statBlocks').textContent = blocks.length - 1;
+  $('statTokens').textContent = state.size;
+  $('statEvents').textContent = events.length;
+  const rows = Array.from(state.values()).slice(-40).reverse().map(t=>`
+    <tr><td>${t.token_id}</td><td>${t.batch_id}</td>
+    <td><span class="status-pill status-${t.status}">${t.status}</span></td>
+    <td>${t.owner}</td></tr>`).join('');
+  $('stateTable').innerHTML = rows;
+}
+function refresh(){ renderChain(); renderState(); }
+
+function callerOrgs(){
+  const chosen = $('orgSelect').value;
+  // simulate a second endorsing org so >=2-org policies pass unless testing rejection
+  const partner = chosen === ORGS.HONDA ? ORGS.TIER1 : ORGS.HONDA;
+  return [chosen, partner];
+}
+
+function seed(n=12){
+  for(let i=0;i<n;i++){
+    componentSeq++;
+    const id = 'BRK-119-' + String(componentSeq).padStart(4,'0');
+    try{
+      registerComponent(id, ACTIVE_BATCH, ORGS.TIER1, [ORGS.TIER1, ORGS.HONDA]);
+      logMsg(true, 'registerComponent', `<b>${id}</b> minted in batch ${ACTIVE_BATCH} (endorsed by Tier1 + Honda)`);
+    }catch(e){ logMsg(false,'registerComponent', e.message); }
+  }
+  refresh();
+}
+
+$('btnSeed').onclick = ()=>seed(12);
+
+$('btnRegister').onclick = ()=>{
+  componentSeq++;
+  const id = 'BRK-119-' + String(componentSeq).padStart(4,'0');
+  try{
+    const {block} = registerComponent(id, ACTIVE_BATCH, $('orgSelect').value, callerOrgs());
+    logMsg(true, 'registerComponent', `<b>${id}</b> registered → block #${block.index}`);
+  }catch(e){ logMsg(false, 'registerComponent', e.message); }
+  refresh();
+};
+
+$('btnShip').onclick = ()=>{
+  const active = Array.from(state.values()).filter(t=>t.status!=='RECALLED' && t.status!=='SHIPPED');
+  if(!active.length){ logMsg(false,'recordShipment','no un-shipped components — seed the batch first'); refresh(); return; }
+  const target = active[active.length-1];
+  const dealer = dealerCycle[dealerIdx++ % dealerCycle.length];
+  try{
+    const {block} = recordShipment(target.token_id, dealer, callerOrgs());
+    logMsg(true, 'recordShipment', `<b>${target.token_id}</b> → ${dealer} → block #${block.index}`);
+  }catch(e){ logMsg(false,'recordShipment', e.message); }
+  refresh();
+};
+
+$('btnUsage').onclick = ()=>{
+  const shipped = Array.from(state.values()).filter(t=>t.status==='SHIPPED');
+  if(!shipped.length){ logMsg(false,'recordUsageLog','no shipped components yet — ship one first'); refresh(); return; }
+  const target = shipped[Math.floor(Math.random()*shipped.length)];
+  const temp = Math.round(70 + Math.random()*35);
+  try{
+    const {block} = recordUsageLog(target.token_id, temp, callerOrgs());
+    logMsg(true, 'recordUsageLog', `<b>${target.token_id}</b> avg temp logged: ${temp}°C → block #${block.index}`);
+  }catch(e){ logMsg(false,'recordUsageLog', e.message); }
+  refresh();
+};
+
+$('btnRecall').onclick = ()=>{
+  const caller = $('orgSelect').value;
+  try{
+    const r = triggerRecall(ACTIVE_BATCH, 'Brake caliper tolerance failure', caller);
+    logMsg(true, 'triggerRecall', `batch <b>${ACTIVE_BATCH}</b>: ${r.affected_count} parts found → RECALLED. Notified: ${r.notified.join(', ')||'(no shipped owners yet)'} → block #${r.block.index}`);
+  }catch(e){ logMsg(false, 'triggerRecall', `<em>${e.message}</em>`); }
+  refresh();
+};
+
+$('btnWarranty').onclick = ()=>{
+  const withLogs = Array.from(state.values()).filter(t=>t.usage_log);
+  if(!withLogs.length){ logMsg(false,'warrantyCheck','no usage logs yet — click "Log usage" first'); refresh(); return; }
+  const target = withLogs[withLogs.length-1];
+  try{
+    const r = warrantyCheck(target.token_id);
+    logMsg(true, 'warrantyCheck', `<b>${target.token_id}</b> avg ${r.avg}°C (threshold ${r.threshold}°C) → ${r.result} (fault: ${r.fault})`);
+  }catch(e){ logMsg(false,'warrantyCheck', e.message); }
+  refresh();
+};
+
+$('btnClose').onclick = ()=>{
+  const recalled = Array.from(state.values()).filter(t=>t.status==='RECALLED');
+  if(!recalled.length){ logMsg(false,'closeRecall','no RECALLED components — trigger a recall first'); refresh(); return; }
+  const target = recalled[0];
+  try{
+    const {block} = closeRecall(target.token_id, 'REPLACED', 'Dealer swapped part under recall program', callerOrgs());
+    logMsg(true, 'closeRecall', `<b>${target.token_id}</b> RECALLED → REPLACED · tx=${block.txID} · block #${block.index}`);
+  }catch(e){ logMsg(false,'closeRecall', e.message); }
+  refresh();
+};
+
+$('btnRevise').onclick = ()=>{
+  const caller = $('orgSelect').value;
+  try{
+    const r = reviseRecallReason(ACTIVE_BATCH, 'Root cause confirmed: out-of-spec alloy in caliper casting', caller);
+    logMsg(true, 'reviseRecallReason', `batch <b>${ACTIVE_BATCH}</b>: amended ${r.amended_count} tokens · tx=${r.block.txID} · block #${r.block.index}`);
+  }catch(e){ logMsg(false,'reviseRecallReason', `<em>${e.message}</em>`); }
+  refresh();
+};
+
+$('btnRevoke').onclick = ()=>{
+  const caller = $('orgSelect').value;
+  try{
+    const r = revokeRecall(ACTIVE_BATCH, 'Independent lab re-test cleared remaining components', caller);
+    logMsg(true, 'revokeRecall', `batch <b>${ACTIVE_BATCH}</b>: reverted ${r.revoked_count} tokens RECALLED → ACTIVE · tx=${r.block.txID} · block #${r.block.index}`);
+  }catch(e){ logMsg(false,'revokeRecall', `<em>${e.message}</em>`); }
+  refresh();
+};
+
+$('btnHistory').onclick = ()=>{
+  const ids = Array.from(state.keys());
+  if(!ids.length){ logMsg(false,'getHistory','no tokens registered yet'); refresh(); return; }
+  const id = ids[0];
+  try{
+    const hist = getHistory(id);
+    const lines = hist.map(h=>`block #${h.block} [${h.event}] tx=${h.txID} hash=${(h.blockHash||'').slice(0,14)}…${h.note?` — ${h.note}`:''}`).join('<br>');
+    logMsg(true, 'getHistory', `<b>${id}</b> full history:<br>${lines}`);
+  }catch(e){ logMsg(false,'getHistory', e.message); }
+  refresh();
+};
+
+$('btnCounterfeit').onclick = ()=>{
+  const ids = Array.from(state.keys());
+  const useFake = Math.random() < 0.35 || !ids.length;
+  const id = useFake ? 'FAKE-PART-' + Math.floor(Math.random()*9000+1000) : ids[Math.floor(Math.random()*ids.length)];
+  const r = counterfeitScan(id);
+  logMsg(r.result==='AUTHENTIC', 'counterfeitScan', `<b>${id}</b> → ${r.result}${r.org_signature?` (sig: ${r.org_signature})`:''}`);
+  refresh();
+};
+
+// initial seed
+seed(12);
+</script>
+</body>
+</html>
