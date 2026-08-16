@@ -1,0 +1,22 @@
+=== SCENARIO: Org3 (Regulator) real three-organisation recall test ===
+
+-- RegisterComponent ORG3-TEST-001 (endorsed by Org1 + Org2) --
+2026-08-16 23:46:40.853 BST 0001 INFO [chaincodeCmd] chaincodeInvokeOrQuery -> Chaincode invoke successful. result: status:200 
+
+-- TriggerRecall BATCH-ORG3TEST, called by Org3MSP (independent Regulator org) --
+2026-08-16 23:46:59.923 BST 0001 INFO [chaincodeCmd] chaincodeInvokeOrQuery -> Chaincode invoke successful. result: status:200 payload:"{\"affectedCount\":1,\"batchId\":\"BATCH-ORG3TEST\",\"notifiedOwners\":[\"Tier1SupplierMSP\"],\"txId\":\"03f7b58db94a657551b5ef9752d08ac4a037ee0f0052b5b1950cc31d84059046\"}" 
+
+-- Query ORG3-TEST-001 after recall (expect status RECALLED) --
+{"docType":"component","tokenId":"ORG3-TEST-001","batchId":"BATCH-ORG3TEST","status":"RECALLED","owner":"Tier1SupplierMSP","dataHash":"da4128636ac5ab2bcaeabb92e19e7090d1b37c6d73d080d241da9896e374d240","submittingOrgMspId":"Org1MSP","coAttestingOrgs":["Org1MSP","Org2MSP"],"timestamp":"2026-08-16T22:46:40.807205Z","reason":"independent regulator-triggered recall test"}
+
+-- Negative case: Org2MSP (non-OEM, non-Regulator) attempts TriggerRecall, expect rejection --
+Error: endorsement failure during invoke. response: status:500 message:"triggerRecall rejected: caller org must be OEM or Regulator, got Org2MSP" 
+
+-- RevokeRecall BATCH-ORG3TEST, called by Org3MSP (regulator-only function), expect success --
+2026-08-16 23:47:24.833 BST 0001 INFO [chaincodeCmd] chaincodeInvokeOrQuery -> Chaincode invoke successful. result: status:200 payload:"{\"batchId\":\"BATCH-ORG3TEST\",\"revokedCount\":1,\"txId\":\"3b48bcb6ab2294aff58bab61541d39388dbe6c3176bf0cfc4cf952bf27b9ba97\"}" 
+
+-- Negative case: Org1MSP (OEM, not Regulator) attempts RevokeRecall, expect rejection --
+Error: endorsement failure during invoke. response: status:500 message:"revokeRecall rejected: caller org must be RegulatorMSP, got Org1MSP" 
+
+2026-08-16 23:47:39.715 BST 0001 INFO [channelCmd] InitCmdFactory -> Endorser and orderer connections initialized
+Blockchain info: {"height":50,"currentBlockHash":"eTQ+AqDu44sjjBQsre7z22bdrf5qnuIfxY5jhE37hXg=","previousBlockHash":"WR2DahaRzltm1T7mGCDY10NggRptzO4YIt3gdo9W9dE="}
