@@ -17,12 +17,12 @@ as_org1() {
 
 inv() {
   peer chaincode invoke -o localhost:7050 --ordererTLSHostnameOverride orderer.example.com --tls --cafile "$ORDERER_CA" \
-    -C mychannel -n honda --peerAddresses localhost:7051 --tlsRootCertFiles $P1 --peerAddresses localhost:9051 --tlsRootCertFiles $P2 \
+    -C mychannel -n component-traceability --peerAddresses localhost:7051 --tlsRootCertFiles $P1 --peerAddresses localhost:9051 --tlsRootCertFiles $P2 \
     -c "$1" 2>&1
   sleep 3
 }
 qry() {
-  peer chaincode query -C mychannel -n honda -c "$1" 2>&1
+  peer chaincode query -C mychannel -n component-traceability -c "$1" 2>&1
 }
 
 as_org1

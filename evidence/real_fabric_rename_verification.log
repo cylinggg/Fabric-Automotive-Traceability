@@ -1,0 +1,7 @@
+=== RegisterComponent RENAME-TEST-001 ===
+[34m2026-08-16 23:28:50.104 BST 0001 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 
+
+=== Query GetComponent RENAME-TEST-001 ===
+{"docType":"component","tokenId":"RENAME-TEST-001","batchId":"BATCH-RENAME","status":"MANUFACTURED","owner":"Tier1SupplierMSP","dataHash":"da4128636ac5ab2bcaeabb92e19e7090d1b37c6d73d080d241da9896e374d240","submittingOrgMspId":"Org1MSP","coAttestingOrgs":["Org1MSP","Org2MSP"],"timestamp":"2026-08-16T22:28:50.048806Z"}
+[34m2026-08-16 23:29:05.208 BST 0001 INFO[0m [channelCmd] [34;1mInitCmdFactory[0m -> Endorser and orderer connections initialized
+Blockchain info: {"height":44,"currentBlockHash":"R3BDNz4//4wRI5fFNxNJ1fPrPk0ReBvnHMqgKPPBKTM=","previousBlockHash":"QU4dAH4KDrnGL8vKDozv3/VkPAwqyLeSPvvTuUEW5Q4="}

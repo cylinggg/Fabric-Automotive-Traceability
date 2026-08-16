@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Honda Fabric Chaincode Simulator</title>
+<title>OEM Fabric Chaincode Simulator</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
@@ -14,8 +14,8 @@
     --line:#31383F;
     --text:#ECEFF1;
     --muted:#8B959E;
-    --honda-red:#E4002B;
-    --honda-red-dim:#5c1220;
+    --oem-red:#E4002B;
+    --oem-red-dim:#5c1220;
     --verified:#00C2A0;
     --verified-dim:#0f3c34;
     --warn:#E8A33D;
@@ -36,7 +36,7 @@
     display:flex; align-items:baseline; justify-content:space-between; gap:16px; flex-wrap:wrap;
   }
   header .title{ font-family:var(--font-display); font-weight:700; font-size:20px; letter-spacing:.2px; }
-  header .title span{ color:var(--honda-red); }
+  header .title span{ color:var(--oem-red); }
   header .subtitle{ color:var(--muted); font-size:12.5px; margin-top:4px; }
   header .badge{
     font-family:var(--font-mono); font-size:11px; color:var(--verified);
@@ -65,7 +65,7 @@
     font-family:var(--font-body); font-size:12.5px; cursor:pointer; transition:border-color .15s, background .15s;
   }
   button.act:hover{ border-color:var(--verified); background:#1f2a28; }
-  button.act.danger:hover{ border-color:var(--honda-red); background:#2a1a1e; }
+  button.act.danger:hover{ border-color:var(--oem-red); background:#2a1a1e; }
   button.act:disabled{ opacity:.35; cursor:not-allowed; }
   button.act .k{ color:var(--muted); font-family:var(--font-mono); font-size:10.5px; }
 
@@ -83,7 +83,7 @@
   }
   .block:last-child::after{ content:''; }
   .block.tx-registerComponent{ border-color:#2a4a6b; }
-  .block.tx-triggerRecall{ border-color:var(--honda-red); box-shadow:0 0 0 1px var(--honda-red-dim); }
+  .block.tx-triggerRecall{ border-color:var(--oem-red); box-shadow:0 0 0 1px var(--oem-red-dim); }
   .block.tx-recordShipment,.block.tx-recordAssembly,.block.tx-recordDelivery,.block.tx-recordUsageLog,.block.tx-recordTest{ border-color:#3a4550; }
   .block .bi{ font-size:10px; color:var(--muted); }
   .block .bt{ font-size:11.5px; color:var(--text); margin:3px 0; font-family:var(--font-display); font-weight:600;}
@@ -96,10 +96,10 @@
     background:var(--panel-2); color:var(--muted); border:1px solid var(--line);
   }
   .log .entry.ok .tag{ color:var(--verified); border-color:var(--verified-dim); }
-  .log .entry.err .tag{ color:var(--honda-red); border-color:var(--honda-red-dim); }
+  .log .entry.err .tag{ color:var(--oem-red); border-color:var(--oem-red-dim); }
   .log .entry .msg{ color:var(--text); }
   .log .entry .msg b{ color:var(--verified); font-weight:600; }
-  .log .entry .msg em{ color:var(--honda-red); font-style:normal; }
+  .log .entry .msg em{ color:var(--oem-red); font-style:normal; }
 
   /* --- right: world state --- */
   .stat-row{ display:flex; justify-content:space-between; padding:5px 0; font-family:var(--font-mono); font-size:12px; border-bottom:1px solid var(--line); }
@@ -110,7 +110,7 @@
   .status-pill{ padding:1px 6px; border-radius:3px; font-size:10px; }
   .status-MANUFACTURED{ background:#2a2f36; color:var(--muted); }
   .status-QC_PASSED,.status-SHIPPED,.status-ASSEMBLED,.status-DELIVERED{ background:var(--verified-dim); color:var(--verified); }
-  .status-RECALLED{ background:var(--honda-red-dim); color:var(--honda-red); }
+  .status-RECALLED{ background:var(--oem-red-dim); color:var(--oem-red); }
 
   footer{ padding:10px 24px; border-top:1px solid var(--line); color:var(--muted); font-size:11px; font-family:var(--font-mono); }
 
@@ -122,7 +122,7 @@
 <div class="app">
   <header>
     <div>
-      <div class="title">Honda <span>Fabric</span> Chaincode Simulator</div>
+      <div class="title">OEM <span>Fabric</span> Chaincode Simulator</div>
       <div class="subtitle">Execute → Order → Validate, modeled from the chaincode design (registerComponent / triggerRecall) &nbsp;·&nbsp; in-memory, hash-linked block ledger</div>
     </div>
     <div class="badge">● world-state: CouchDB-style JSON docs (simulated)</div>
@@ -135,7 +135,7 @@
         <select id="orgSelect">
           <option value="Tier1SupplierMSP">Tier1SupplierMSP</option>
           <option value="Tier2SupplierMSP">Tier2SupplierMSP</option>
-          <option value="HondaOEM_MSP">HondaOEM_MSP</option>
+          <option value="OEM_MSP">OEM_MSP</option>
           <option value="RegulatorMSP">RegulatorMSP</option>
           <option value="DealerMSP">DealerMSP</option>
         </select>
@@ -150,7 +150,7 @@
 
       <div class="action-group">
         <div class="glabel">02 · Scenario</div>
-        <button class="act danger" id="btnRecall">Trigger recall<br><span class="k">triggerRecall() · Honda/Regulator only</span></button>
+        <button class="act danger" id="btnRecall">Trigger recall<br><span class="k">triggerRecall() · OEM/Regulator only</span></button>
         <button class="act" id="btnWarranty">Check warranty<br><span class="k">warrantyCheck() · >85°C = user fault</span></button>
         <button class="act" id="btnCounterfeit">Scan for counterfeit<br><span class="k">counterfeitScan()</span></button>
       </div>
@@ -158,7 +158,7 @@
       <div class="action-group">
         <div class="glabel">03 · Recall lifecycle</div>
         <button class="act" id="btnClose">Close recall (repair)<br><span class="k">closeRecall() · needs ≥2 orgs</span></button>
-        <button class="act" id="btnRevise">Amend recall reason<br><span class="k">reviseRecallReason() · Honda/Regulator</span></button>
+        <button class="act" id="btnRevise">Amend recall reason<br><span class="k">reviseRecallReason() · OEM/Regulator</span></button>
         <button class="act danger" id="btnRevoke">Revoke recall<br><span class="k">revokeRecall() · Regulator ONLY</span></button>
         <button class="act" id="btnHistory">View full history<br><span class="k">getHistory() · block# + tx hash</span></button>
       </div>
@@ -208,7 +208,7 @@ function hashStr(str){
 }
 
 // ---------- chaincode engine (ports fabric-sim-core.js logic to the browser) ----------
-const ORGS = { TIER1:'Tier1SupplierMSP', TIER2:'Tier2SupplierMSP', HONDA:'HondaOEM_MSP', REGULATOR:'RegulatorMSP', DEALER:'DealerMSP' };
+const ORGS = { TIER1:'Tier1SupplierMSP', TIER2:'Tier2SupplierMSP', OEM:'OEM_MSP', REGULATOR:'RegulatorMSP', DEALER:'DealerMSP' };
 const state = new Map();
 const blocks = [{ index:0, txID:'GENESIS', type:'GENESIS', prevHash:'0'.repeat(16), hash: hashStr('GENESIS') }];
 const events = [];
@@ -259,7 +259,7 @@ function recordUsageLog(componentID, avgTempC, endorsingOrgs){
   return {token, block};
 }
 function triggerRecall(batchID, reason, callerOrg){
-  requireEndorsement([callerOrg], {allowedOrgs:[ORGS.HONDA, ORGS.REGULATOR]});
+  requireEndorsement([callerOrg], {allowedOrgs:[ORGS.OEM, ORGS.REGULATOR]});
   const affected = [];
   for (const [key, doc] of state.entries()){
     if (doc.batch_id === batchID && doc.status !== 'RECALLED'){
@@ -295,7 +295,7 @@ function closeRecall(componentID, resolution, note, endorsingOrgs){
   return {token, block};
 }
 function reviseRecallReason(batchID, amendedReason, callerOrg){
-  requireEndorsement([callerOrg], {allowedOrgs:[ORGS.HONDA, ORGS.REGULATOR]});
+  requireEndorsement([callerOrg], {allowedOrgs:[ORGS.OEM, ORGS.REGULATOR]});
   const targets = Array.from(state.entries()).filter(([,d])=>d.batch_id===batchID && d.status==='RECALLED');
   const block = commit('reviseRecallReason', {batchID, amendedReason, count:targets.length}, [callerOrg]);
   for(const [,doc] of targets){
@@ -369,7 +369,7 @@ function refresh(){ renderChain(); renderState(); }
 function callerOrgs(){
   const chosen = $('orgSelect').value;
   // simulate a second endorsing org so >=2-org policies pass unless testing rejection
-  const partner = chosen === ORGS.HONDA ? ORGS.TIER1 : ORGS.HONDA;
+  const partner = chosen === ORGS.OEM ? ORGS.TIER1 : ORGS.OEM;
   return [chosen, partner];
 }
 
@@ -378,8 +378,8 @@ function seed(n=12){
     componentSeq++;
     const id = 'BRK-119-' + String(componentSeq).padStart(4,'0');
     try{
-      registerComponent(id, ACTIVE_BATCH, ORGS.TIER1, [ORGS.TIER1, ORGS.HONDA]);
-      logMsg(true, 'registerComponent', `<b>${id}</b> minted in batch ${ACTIVE_BATCH} (endorsed by Tier1 + Honda)`);
+      registerComponent(id, ACTIVE_BATCH, ORGS.TIER1, [ORGS.TIER1, ORGS.OEM]);
+      logMsg(true, 'registerComponent', `<b>${id}</b> minted in batch ${ACTIVE_BATCH} (endorsed by Tier1 + OEM)`);
     }catch(e){ logMsg(false,'registerComponent', e.message); }
   }
   refresh();

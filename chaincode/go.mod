@@ -1,4 +1,4 @@
-module honda-chaincode
+module component-traceability-chaincode
 
 go 1.21
 

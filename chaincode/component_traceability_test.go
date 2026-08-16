@@ -75,7 +75,7 @@ func (f *fakeStub) SplitCompositeKey(compositeKey string) (string, []string, err
 }
 
 // GetStateByPartialCompositeKey scans the same in-memory state map that
-// PutState writes to, since addToBatchIndex (honda_component.go) stores its
+// PutState writes to, since addToBatchIndex (component_traceability.go) stores its
 // composite-key index entries via an ordinary PutState call, exactly as it
 // does against a real peer's world state.
 func (f *fakeStub) GetStateByPartialCompositeKey(objectType string, attrs []string) (shim.StateQueryIteratorInterface, error) {
