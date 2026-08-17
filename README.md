@@ -7,7 +7,8 @@ delivery → recall).
 
 This code accompanies the dissertation *"A Permissioned Blockchain
 Framework for Automotive Component Traceability: Chaincode Design and
-Evaluation Using Hyperledger Fabric."* It is a research prototype, not a
+Evaluation on a Local Hyperledger Fabric Test Network."* It is a research
+prototype evaluated on a local, Docker-based Fabric test network, not a
 production system. Organisation names are generic (`OEM`, `Tier1Supplier`,
 `Tier2Supplier`, `Regulator`, `Dealer`) rather than tied to any named
 manufacturer.
@@ -36,10 +37,19 @@ manufacturer.
   fix on delivery, batch recall, `CloseRecall`, and `ReviseRecallReason`.
   All transactions in this script are real, endorsed, committed Fabric
   transactions (see `evidence/real_fabric_run2_full_scenario.log`).
-- `evidence/` — unedited console output of both runs above, captured
+- `evidence/` — unedited console output of four separate runs, captured
   directly from `peer chaincode invoke`/`query` against a running
-  network (org peers, orderer, and two CouchDB instances), not from any
-  simulator.
+  network, not from any simulator: `real_fabric_run1_timing_lesson.log`
+  and `real_fabric_run2_full_scenario.log` (the two-organisation
+  lifecycle/recall runs above), `real_fabric_rename_verification.log` (a
+  `RegisterComponent`/`GetComponent` pair confirming the chaincode still
+  works after being repackaged and redeployed under this generic name),
+  and `real_fabric_org3_regulator_scenario.log` (a third organisation,
+  `Org3MSP`, added to the same network via `fabric-samples`' `addOrg3`,
+  then a real regulator-triggered `TriggerRecall` and a real
+  `RevokeRecall` invoked by `Org3MSP`, alongside the corresponding
+  rejections when `Org2MSP`/`Org1MSP` attempt those same calls without
+  authority).
 - `chaincode/component_traceability_test.go` — Go unit tests (`go test
   ./...`, no Docker or live network required) covering the business logic
   that does not need a real peer to verify: real-SHA-256 hashing,
@@ -82,14 +92,16 @@ manufacturer.
   unmodified, started with `./network.sh up createChannel -s couchdb`;
   crypto material is generated fresh per deployment and is not something
   that should ever be committed to a repository.
-- A `RegulatorMSP` organisation. The reference `test-network` only
-  provisions two peer organisations (`Org1MSP`, `Org2MSP`); the chaincode
-  assigns `Org1MSP` the OEM role and reserves `Org3MSP` for a regulator
-  role that was never deployed. Functions gated to `Org3MSP` only
-  (`RevokeRecall`) are implemented and unit-tested but were not
-  exercised against a live network in this evidence set — see the
-  dissertation's Scenario Analysis and Limitations for the honest
-  real/not-yet-tested split.
+- A packaged, ready-to-commit `RegulatorMSP` deployment bundle. The
+  reference `test-network` starts with only two peer organisations
+  (`Org1MSP`, `Org2MSP`); `Org3MSP` (the regulator role) was added
+  afterwards using `fabric-samples`' standard `addOrg3` channel-update
+  script, then installed and approved for the already-committed
+  chaincode definition. That step is not automated in this repo, but the
+  resulting real transactions, `Org3MSP` triggering a recall and
+  invoking the `Org3MSP`-only `RevokeRecall`, are recorded in
+  `evidence/real_fabric_org3_regulator_scenario.log`; see the
+  dissertation's Scenario 5 for the walkthrough.
 
 ## Reproducing the evidence logs
 
