@@ -69,6 +69,10 @@ manufacturer.
   evidence (open the file directly in a browser; no build step or server
   required). Its results are superseded wherever both exist by the real
   Fabric evidence in `evidence/`.
+- `simulator/simulator-demo-screenshot.pdf` — a screenshot of the
+  simulator running in-browser: 12 `registerComponent` calls succeeding
+  and one `triggerRecall` attempt from `Tier1SupplierMSP` being correctly
+  rejected by the `OEM_MSP`/`RegulatorMSP`-only endorsement check.
 - `network-config/README.md` — which parts of the deployment are the
   unmodified `fabric-samples/test-network`, the exact `peer lifecycle
   chaincode commit` invocation used, and an explicit note that this
