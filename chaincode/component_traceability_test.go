@@ -62,16 +62,62 @@ func (f *fakeStub) SetEvent(name string, payload []byte) error {
 	return nil
 }
 
+// fakeCompositeKeyDelim mirrors the delimiter Fabric's real shim uses
+// internally for composite keys (a U+0000 control byte, not a printable
+// character). An earlier version of this fake used a literal "~" as the
+// delimiter, which happens to also appear inside this chaincode's own
+// object-type constant, batchComponentIndex = "batch~component": splitting
+// on "~" therefore produced one segment too many, so SplitCompositeKey's
+// caller (batchIndexMembers) never matched len(parts)==2 and every batch
+// index lookup silently returned zero members. That bug was never caught by
+// the earlier test suite because no prior unit test exercised TriggerRecall
+// actually finding and recalling real components; only the real Fabric
+// network (whose genuine composite-key encoding does not have this
+// collision) ever exercised that path. Using a delimiter that cannot appear
+// in ordinary object-type or attribute strings, as Fabric itself does,
+// removes the collision instead of merely avoiding it by coincidence.
+const fakeCompositeKeyDelim = "\x00"
+
 func (f *fakeStub) CreateCompositeKey(objectType string, attrs []string) (string, error) {
-	return objectType + "~" + strings.Join(attrs, "~"), nil
+	var b strings.Builder
+	b.WriteString(fakeCompositeKeyDelim)
+	b.WriteString(objectType)
+	b.WriteString(fakeCompositeKeyDelim)
+	for _, a := range attrs {
+		b.WriteString(a)
+		b.WriteString(fakeCompositeKeyDelim)
+	}
+	return b.String(), nil
 }
 
 func (f *fakeStub) SplitCompositeKey(compositeKey string) (string, []string, error) {
-	parts := strings.Split(compositeKey, "~")
-	if len(parts) < 1 {
-		return "", nil, fmt.Errorf("invalid composite key")
+	if len(compositeKey) == 0 || !strings.HasPrefix(compositeKey, fakeCompositeKeyDelim) {
+		return "", nil, fmt.Errorf("invalid composite key: %q", compositeKey)
 	}
-	return parts[0], parts[1:], nil
+	parts := strings.Split(strings.TrimPrefix(compositeKey, fakeCompositeKeyDelim), fakeCompositeKeyDelim)
+	if len(parts) < 1 {
+		return "", nil, fmt.Errorf("invalid composite key: %q", compositeKey)
+	}
+	objectType := parts[0]
+	attrs := parts[1:]
+	// The encoding above always ends with a trailing delimiter, so the
+	// final split segment is always an empty string; drop it.
+	if len(attrs) > 0 && attrs[len(attrs)-1] == "" {
+		attrs = attrs[:len(attrs)-1]
+	}
+	return objectType, attrs, nil
+}
+
+func fakeCompositeKeyPrefix(objectType string, attrs []string) string {
+	var b strings.Builder
+	b.WriteString(fakeCompositeKeyDelim)
+	b.WriteString(objectType)
+	b.WriteString(fakeCompositeKeyDelim)
+	for _, a := range attrs {
+		b.WriteString(a)
+		b.WriteString(fakeCompositeKeyDelim)
+	}
+	return b.String()
 }
 
 // GetStateByPartialCompositeKey scans the same in-memory state map that
@@ -79,7 +125,7 @@ func (f *fakeStub) SplitCompositeKey(compositeKey string) (string, []string, err
 // composite-key index entries via an ordinary PutState call, exactly as it
 // does against a real peer's world state.
 func (f *fakeStub) GetStateByPartialCompositeKey(objectType string, attrs []string) (shim.StateQueryIteratorInterface, error) {
-	prefix := objectType + "~" + strings.Join(attrs, "~")
+	prefix := fakeCompositeKeyPrefix(objectType, attrs)
 	var keys []string
 	for k := range f.state {
 		if strings.HasPrefix(k, prefix) {
@@ -163,15 +209,24 @@ func TestSplitCSV(t *testing.T) {
 
 // --- chaincode-level unit tests using the fake stub ---
 
+// reportHash is a small test helper standing in for what a real client does
+// before ever calling this chaincode: hash the off-chain report itself and
+// submit only the digest. Using the chaincode's own hashHex here just
+// produces a realistic-looking 64-character hex string for test fixtures;
+// it does not mean the chaincode hashes anything itself any more.
+func reportHash(content string) string {
+	return hashHex(content)
+}
+
 func TestRegisterComponent_RejectsDuplicateID(t *testing.T) {
 	s := &SmartContract{}
 	stub := newFakeStub("tx1")
 	ctx := &fakeCtx{stub: stub, callerID: oemOrgMSP}
 
-	if err := s.RegisterComponent(ctx, "COMP-1", "BATCH-X", "Tier2Supplier", "report v1", "Org2MSP"); err != nil {
+	if err := s.RegisterComponent(ctx, "COMP-1", "BATCH-X", "Tier2Supplier", reportHash("report v1"), "Org2MSP"); err != nil {
 		t.Fatalf("first registration should succeed, got error: %v", err)
 	}
-	err := s.RegisterComponent(ctx, "COMP-1", "BATCH-X", "Tier2Supplier", "report v2", "Org2MSP")
+	err := s.RegisterComponent(ctx, "COMP-1", "BATCH-X", "Tier2Supplier", reportHash("report v2"), "Org2MSP")
 	if err == nil {
 		t.Fatalf("second registration with the same TokenID should be rejected, got nil error")
 	}
@@ -187,9 +242,23 @@ func TestRegisterComponent_RejectsInsufficientCoAttestation(t *testing.T) {
 
 	// No declared co-attesting orgs and the caller is a single org, so the
 	// co-attestation set has only one member; must be rejected.
-	err := s.RegisterComponent(ctx, "COMP-1", "BATCH-X", "Tier2Supplier", "report", "")
+	err := s.RegisterComponent(ctx, "COMP-1", "BATCH-X", "Tier2Supplier", reportHash("report"), "")
 	if err == nil {
 		t.Fatalf("registration with only one co-attesting org should be rejected, got nil error")
+	}
+}
+
+func TestRegisterComponent_RejectsNonHashArgument(t *testing.T) {
+	s := &SmartContract{}
+	stub := newFakeStub("tx1")
+	ctx := &fakeCtx{stub: stub, callerID: oemOrgMSP}
+
+	// A caller passing raw report text (not a digest) must be rejected: this
+	// is the guard against the off-chain report being sent to the chaincode
+	// at all, not just a format nicety.
+	err := s.RegisterComponent(ctx, "COMP-1", "BATCH-X", "Tier2Supplier", "this is the full QC report text, not a hash", "Org2MSP")
+	if err == nil {
+		t.Fatalf("registration with a non-hash testReportHash argument should be rejected, got nil error")
 	}
 }
 
@@ -198,15 +267,15 @@ func TestRecordTest_RejectsWrongPriorStatus(t *testing.T) {
 	stub := newFakeStub("tx1")
 	ctx := &fakeCtx{stub: stub, callerID: oemOrgMSP}
 
-	if err := s.RegisterComponent(ctx, "COMP-1", "BATCH-X", "Tier2Supplier", "report", "Org2MSP"); err != nil {
+	if err := s.RegisterComponent(ctx, "COMP-1", "BATCH-X", "Tier2Supplier", reportHash("report"), "Org2MSP"); err != nil {
 		t.Fatalf("setup registration failed: %v", err)
 	}
 	// Calling RecordTest twice: the second call finds status QC_PASSED, not
 	// MANUFACTURED, and must be rejected.
-	if err := s.RecordTest(ctx, "COMP-1", "report", "Org2MSP"); err != nil {
+	if err := s.RecordTest(ctx, "COMP-1", reportHash("test report"), "Org2MSP"); err != nil {
 		t.Fatalf("first RecordTest should succeed, got: %v", err)
 	}
-	err := s.RecordTest(ctx, "COMP-1", "report", "Org2MSP")
+	err := s.RecordTest(ctx, "COMP-1", reportHash("test report"), "Org2MSP")
 	if err == nil {
 		t.Fatalf("second RecordTest on an already-QC_PASSED component should be rejected, got nil error")
 	}
@@ -224,7 +293,7 @@ func TestCoAttestationOrderIsSortedAndDeterministic(t *testing.T) {
 	// Scenario 3 where both endorsing peers computed the same read-write
 	// set regardless of which organisation submitted the transaction.
 	ctxA := &fakeCtx{stub: stub, callerID: "Org2MSP"}
-	if err := s.RegisterComponent(ctxA, "COMP-A", "BATCH-X", "Tier2Supplier", "report", "Org1MSP"); err != nil {
+	if err := s.RegisterComponent(ctxA, "COMP-A", "BATCH-X", "Tier2Supplier", reportHash("report"), "Org1MSP"); err != nil {
 		t.Fatalf("registration failed: %v", err)
 	}
 	tokA, err := s.mustGetToken(ctxA, "COMP-A")
@@ -234,6 +303,187 @@ func TestCoAttestationOrderIsSortedAndDeterministic(t *testing.T) {
 	want := []string{"Org1MSP", "Org2MSP"}
 	if len(tokA.CoAttestingOrgs) != 2 || tokA.CoAttestingOrgs[0] != want[0] || tokA.CoAttestingOrgs[1] != want[1] {
 		t.Fatalf("CoAttestingOrgs = %v, want sorted %v", tokA.CoAttestingOrgs, want)
+	}
+}
+
+// --- cross-batch assembly (supervisor feedback: Batch -> Component ->
+// Product/Vehicle should not require every component to share one batch) ---
+
+func shipComponent(t *testing.T, s *SmartContract, ctx *fakeCtx, id, batch string) {
+	t.Helper()
+	if err := s.RegisterComponent(ctx, id, batch, "Tier2Supplier", reportHash(id+"-report"), "Org2MSP"); err != nil {
+		t.Fatalf("setup RegisterComponent(%s) failed: %v", id, err)
+	}
+	if err := s.RecordTest(ctx, id, reportHash(id+"-test"), "Org2MSP"); err != nil {
+		t.Fatalf("setup RecordTest(%s) failed: %v", id, err)
+	}
+	if err := s.RecordShipment(ctx, id, "Tier2Supplier", "Org1MSP", "Org2MSP"); err != nil {
+		t.Fatalf("setup RecordShipment(%s) failed: %v", id, err)
+	}
+}
+
+func TestRecordAssembly_AllowsCrossBatchComponents(t *testing.T) {
+	s := &SmartContract{}
+	stub := newFakeStub("tx1")
+	ctx := &fakeCtx{stub: stub, callerID: oemOrgMSP}
+
+	shipComponent(t, s, ctx, "COMP-X1", "BATCH-X")
+	shipComponent(t, s, ctx, "COMP-Y1", "BATCH-Y")
+
+	// Two components from two different batches: an earlier version of this
+	// chaincode rejected this outright ("mixed-batch assembly is not
+	// permitted"). It must now succeed, because a real product is routinely
+	// built from parts drawn from more than one production batch.
+	if err := s.RecordAssembly(ctx, "PRODUCT-XY", "COMP-X1,COMP-Y1", "RECIPE-1", "Org2MSP"); err != nil {
+		t.Fatalf("cross-batch RecordAssembly should succeed, got error: %v", err)
+	}
+	product, err := s.mustGetToken(ctx, "PRODUCT-XY")
+	if err != nil {
+		t.Fatalf("failed to read back product: %v", err)
+	}
+	want := []string{"BATCH-X", "BATCH-Y"}
+	if len(product.ComponentBatches) != 2 || product.ComponentBatches[0] != want[0] || product.ComponentBatches[1] != want[1] {
+		t.Fatalf("ComponentBatches = %v, want sorted %v", product.ComponentBatches, want)
+	}
+}
+
+func TestTriggerRecall_FindsCrossBatchProductViaEitherConstituentBatch(t *testing.T) {
+	s := &SmartContract{}
+	stub := newFakeStub("tx1")
+	ctx := &fakeCtx{stub: stub, callerID: oemOrgMSP}
+
+	shipComponent(t, s, ctx, "COMP-X2", "BATCH-X2")
+	shipComponent(t, s, ctx, "COMP-Y2", "BATCH-Y2")
+	if err := s.RecordAssembly(ctx, "PRODUCT-XY2", "COMP-X2,COMP-Y2", "RECIPE-2", "Org2MSP"); err != nil {
+		t.Fatalf("setup RecordAssembly failed: %v", err)
+	}
+
+	// Recalling BATCH-Y2 (not BATCH-X2, whichever the product's "primary"
+	// BatchID happens to be) must still find and recall the product: the
+	// product is indexed under every batch it draws components from, not
+	// only its first one.
+	if _, err := s.TriggerRecall(ctx, "BATCH-Y2", "defect found in batch Y2"); err != nil {
+		t.Fatalf("TriggerRecall on BATCH-Y2 should succeed, got: %v", err)
+	}
+	product, err := s.mustGetToken(ctx, "PRODUCT-XY2")
+	if err != nil {
+		t.Fatalf("failed to read back product: %v", err)
+	}
+	if product.RecallStatus != "RECALLED" {
+		t.Fatalf("product RecallStatus = %q, want RECALLED after recalling one of its two constituent batches", product.RecallStatus)
+	}
+}
+
+// --- recall/lifecycle separation (supervisor feedback: recall must not
+// overwrite or destroy lifecycle status) ---
+
+func TestTriggerRecall_PreservesLifecycleStatus(t *testing.T) {
+	s := &SmartContract{}
+	stub := newFakeStub("tx1")
+	ctx := &fakeCtx{stub: stub, callerID: oemOrgMSP}
+
+	shipComponent(t, s, ctx, "COMP-D1", "BATCH-D")
+	if err := s.RecordAssembly(ctx, "PRODUCT-D1", "COMP-D1", "RECIPE-D", "Org2MSP"); err != nil {
+		t.Fatalf("setup RecordAssembly failed: %v", err)
+	}
+	if err := s.RecordDelivery(ctx, "PRODUCT-D1", "DealerMSP", "Org2MSP"); err != nil {
+		t.Fatalf("setup RecordDelivery failed: %v", err)
+	}
+	before, err := s.mustGetToken(ctx, "COMP-D1")
+	if err != nil || before.Status != "DELIVERED" {
+		t.Fatalf("setup: expected component to be DELIVERED before recall, got status=%q err=%v", before.Status, err)
+	}
+
+	if _, err := s.TriggerRecall(ctx, "BATCH-D", "defect found post-delivery"); err != nil {
+		t.Fatalf("TriggerRecall failed: %v", err)
+	}
+	after, err := s.mustGetToken(ctx, "COMP-D1")
+	if err != nil {
+		t.Fatalf("failed to read back component after recall: %v", err)
+	}
+	if after.RecallStatus != "RECALLED" {
+		t.Fatalf("RecallStatus = %q, want RECALLED", after.RecallStatus)
+	}
+	if after.Status != "DELIVERED" {
+		t.Fatalf("Status = %q, want DELIVERED to survive the recall unchanged (this is the exact bug the supervisor flagged: recall must not overwrite lifecycle status)", after.Status)
+	}
+}
+
+func TestRevokeRecall_RestoresOriginalLifecycleStatusInsteadOfGenericActive(t *testing.T) {
+	s := &SmartContract{}
+	stub := newFakeStub("tx1")
+	ctx := &fakeCtx{stub: stub, callerID: oemOrgMSP}
+	regCtx := &fakeCtx{stub: stub, callerID: regulatorOrgMSP}
+
+	shipComponent(t, s, ctx, "COMP-D2", "BATCH-D2")
+	if err := s.RecordAssembly(ctx, "PRODUCT-D2", "COMP-D2", "RECIPE-D2", "Org2MSP"); err != nil {
+		t.Fatalf("setup RecordAssembly failed: %v", err)
+	}
+	if err := s.RecordDelivery(ctx, "PRODUCT-D2", "DealerMSP", "Org2MSP"); err != nil {
+		t.Fatalf("setup RecordDelivery failed: %v", err)
+	}
+	if _, err := s.TriggerRecall(ctx, "BATCH-D2", "precautionary recall"); err != nil {
+		t.Fatalf("setup TriggerRecall failed: %v", err)
+	}
+
+	if _, err := s.RevokeRecall(regCtx, "BATCH-D2", "root cause found to be unrelated"); err != nil {
+		t.Fatalf("RevokeRecall failed: %v", err)
+	}
+	tok, err := s.mustGetToken(ctx, "COMP-D2")
+	if err != nil {
+		t.Fatalf("failed to read back component after revocation: %v", err)
+	}
+	if tok.RecallStatus != "" {
+		t.Fatalf("RecallStatus = %q, want cleared to empty after RevokeRecall", tok.RecallStatus)
+	}
+	if tok.Status != "DELIVERED" {
+		t.Fatalf("Status = %q, want DELIVERED preserved; an earlier version reset this to a generic ACTIVE value, losing the fact the component had already been delivered", tok.Status)
+	}
+}
+
+func TestRequireNotRecalled_BlocksFurtherLifecycleProgression(t *testing.T) {
+	s := &SmartContract{}
+	stub := newFakeStub("tx1")
+	ctx := &fakeCtx{stub: stub, callerID: oemOrgMSP}
+
+	if err := s.RegisterComponent(ctx, "COMP-R1", "BATCH-R", "Tier2Supplier", reportHash("r"), "Org2MSP"); err != nil {
+		t.Fatalf("setup registration failed: %v", err)
+	}
+	if err := s.RecordTest(ctx, "COMP-R1", reportHash("t"), "Org2MSP"); err != nil {
+		t.Fatalf("setup RecordTest failed: %v", err)
+	}
+	if _, err := s.TriggerRecall(ctx, "BATCH-R", "defect found before shipment"); err != nil {
+		t.Fatalf("setup TriggerRecall failed: %v", err)
+	}
+
+	// The component's lifecycle Status is still QC_PASSED (recall does not
+	// touch it), so without an explicit RecallStatus guard, RecordShipment
+	// would otherwise be free to proceed on a component that is currently
+	// under recall.
+	err := s.RecordShipment(ctx, "COMP-R1", "Tier2Supplier", "Org1MSP", "Org2MSP")
+	if err == nil {
+		t.Fatalf("RecordShipment on a RECALLED component should be rejected, got nil error")
+	}
+	if !strings.Contains(err.Error(), "RECALLED") {
+		t.Fatalf("expected a RECALLED-related rejection, got: %v", err)
+	}
+}
+
+func TestProvenanceCheck_DistinguishesRegisteredFromUnknown(t *testing.T) {
+	s := &SmartContract{}
+	stub := newFakeStub("tx1")
+	ctx := &fakeCtx{stub: stub, callerID: oemOrgMSP}
+
+	if err := s.RegisterComponent(ctx, "COMP-P1", "BATCH-P", "Tier2Supplier", reportHash("p"), "Org2MSP"); err != nil {
+		t.Fatalf("setup registration failed: %v", err)
+	}
+	out, err := s.ProvenanceCheck(ctx, "COMP-P1")
+	if err != nil || !strings.Contains(out, "REGISTERED_WITH_SUFFICIENT_ATTESTATION") {
+		t.Fatalf("ProvenanceCheck on a registered component = %q, err=%v, want REGISTERED_WITH_SUFFICIENT_ATTESTATION", out, err)
+	}
+	out, err = s.ProvenanceCheck(ctx, "COMP-DOES-NOT-EXIST")
+	if err != nil || !strings.Contains(out, "NOT_FOUND") {
+		t.Fatalf("ProvenanceCheck on an unregistered component = %q, err=%v, want NOT_FOUND", out, err)
 	}
 }
 

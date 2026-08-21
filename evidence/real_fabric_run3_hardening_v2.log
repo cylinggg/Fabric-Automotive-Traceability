@@ -1,0 +1,86 @@
+=== component-traceability v2.0 (sequence 2) hardening-pass evidence ===
+Committed on the same local two-organisation Fabric test-network (later
+extended with Org3/RegulatorMSP) used throughout this repository, replacing
+v1.0/sequence 1. This run demonstrates the four fixes made in response to
+supervisor feedback on the second draft:
+
+  1. Off-chain report exposure: RegisterComponent/RecordTest now take a
+     client-computed SHA-256 hex digest (testReportHash) as an argument
+     instead of the report text itself, so the report is never sent to, or
+     visible in, a transaction proposal.
+  2. Cross-batch product assembly: RecordAssembly no longer requires every
+     component to share one batch (Batch -> Component -> Product/Vehicle ->
+     Dealer). PRODUCT-Z below is deliberately assembled from components in
+     two different batches (BATCH-Z1, BATCH-Z2) and is indexed under both.
+  3. Recall/lifecycle separation: recall status is tracked in a new
+     recallStatus field, entirely separate from the lifecycle status field.
+     TriggerRecall never touches lifecycle status; RevokeRecall clears
+     recallStatus without resetting lifecycle status to a generic
+     placeholder, unlike the version evaluated in the first draft.
+  4. CounterfeitScan renamed to ProvenanceCheck, since the original name
+     implied a stronger guarantee (physical authenticity) than the function
+     verifies (ledger presence and declared co-attestation).
+
+Console output below is unedited peer chaincode invoke/query output against
+the real network, captured in a single run.
+### RUN2 STEP A: Register + fully cycle COMP-Z1,COMP-Z2 (BATCH-Z1) and COMP-Z3 (BATCH-Z2) to SHIPPED ###
+-- deliberately spanning two batches: a real product routinely combines parts from more than one batch --
+-- RegisterComponent COMP-Z1 (BATCH-Z1) --
+[34m2026-08-21 16:10:49.513 BST 0001 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 
+-- RecordTest COMP-Z1 --
+[34m2026-08-21 16:10:52.610 BST 0001 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 
+-- RecordShipment COMP-Z1 --
+[34m2026-08-21 16:10:55.689 BST 0001 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 
+-- RegisterComponent COMP-Z2 (BATCH-Z1) --
+[34m2026-08-21 16:10:58.790 BST 0001 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 
+-- RecordTest COMP-Z2 --
+[34m2026-08-21 16:11:01.885 BST 0001 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 
+-- RecordShipment COMP-Z2 --
+[34m2026-08-21 16:11:04.956 BST 0001 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 
+-- RegisterComponent COMP-Z3 (BATCH-Z2, a different batch from COMP-Z1/COMP-Z2) --
+[34m2026-08-21 16:11:08.049 BST 0001 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 
+[34m2026-08-21 16:11:11.144 BST 0001 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 
+[34m2026-08-21 16:11:14.223 BST 0001 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 
+### RUN2 STEP B: RecordAssembly PRODUCT-Z (3 components spanning BATCH-Z1 and BATCH-Z2) ###
+[34m2026-08-21 16:11:17.306 BST 0001 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 
+-- QUERY PRODUCT-Z for componentBatches (expect ["BATCH-Z1","BATCH-Z2"]) --
+{"docType":"product","tokenId":"PRODUCT-Z","batchId":"BATCH-Z1","componentBatches":["BATCH-Z1","BATCH-Z2"],"recipeId":"RECIPE-STD","status":"ASSEMBLED","owner":"Org1MSP","submittingOrgMspId":"Org1MSP","coAttestingOrgs":["Org1MSP","Org2MSP"],"timestamp":"2026-08-21T15:11:17.296851Z","components":["COMP-Z1","COMP-Z2","COMP-Z3"]}
+### RUN2 STEP C: RecordDelivery PRODUCT-Z to DealerZ (should cascade to all 3 components) ###
+[34m2026-08-21 16:11:20.431 BST 0001 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 
+-- QUERY COMP-Z1 after delivery (expect owner=DealerZ, status=DELIVERED) --
+{"docType":"component","tokenId":"COMP-Z1","batchId":"BATCH-Z1","status":"DELIVERED","owner":"DealerZ","dataHash":"0fcae2fea7056d815b73f7750c4634f0352a053ce9b55de04002494b56ad0219","submittingOrgMspId":"Org1MSP","coAttestingOrgs":["Org1MSP","Org2MSP"],"timestamp":"2026-08-21T15:10:49.491299Z"}
+-- QUERY COMP-Z2 after delivery --
+{"docType":"component","tokenId":"COMP-Z2","batchId":"BATCH-Z1","status":"DELIVERED","owner":"DealerZ","dataHash":"040f83e56d4c09b1d52a19b856671d268439761f2fb19a88c9c64025340d6bc0","submittingOrgMspId":"Org1MSP","coAttestingOrgs":["Org1MSP","Org2MSP"],"timestamp":"2026-08-21T15:10:58.782487Z"}
+-- QUERY COMP-Z3 after delivery --
+{"docType":"component","tokenId":"COMP-Z3","batchId":"BATCH-Z2","status":"DELIVERED","owner":"DealerZ","dataHash":"9c65a4880cc3744cfc9cda52091c18e6871308abd39cbc475d251ae57ece60b6","submittingOrgMspId":"Org1MSP","coAttestingOrgs":["Org1MSP","Org2MSP"],"timestamp":"2026-08-21T15:11:08.042645Z"}
+### RUN2 STEP D: Negative - duplicate assembly (PRODUCT-Z already exists) ###
+Error: endorsement failure during invoke. response: status:500 message:"recordAssembly rejected: product PRODUCT-Z is already registered" 
+### RUN2 STEP E: TriggerRecall on BATCH-Z2 only (recalling the SECOND constituent batch of PRODUCT-Z, not its primary BatchID) ###
+-- this must still find PRODUCT-Z, because it is indexed under every batch its components were drawn from --
+[34m2026-08-21 16:11:26.700 BST 0001 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 payload:"{\"affectedCount\":2,\"batchId\":\"BATCH-Z2\",\"notifiedOwners\":[\"DealerZ\"],\"txId\":\"7f193a839f076656ee793e0f1d7a6d147b85f184ffa4663cec693c5d6242326b\"}" 
+-- QUERY PRODUCT-Z and COMP-Z1 (expect recallStatus=RECALLED, status STILL DELIVERED, not overwritten) --
+{"docType":"product","tokenId":"PRODUCT-Z","batchId":"BATCH-Z1","componentBatches":["BATCH-Z1","BATCH-Z2"],"recipeId":"RECIPE-STD","status":"DELIVERED","recallStatus":"RECALLED","owner":"DealerZ","submittingOrgMspId":"Org1MSP","coAttestingOrgs":["Org1MSP","Org2MSP"],"timestamp":"2026-08-21T15:11:17.296851Z","reason":"seatbelt tensioner fault","components":["COMP-Z1","COMP-Z2","COMP-Z3"]}
+{"docType":"component","tokenId":"COMP-Z1","batchId":"BATCH-Z1","status":"DELIVERED","owner":"DealerZ","dataHash":"0fcae2fea7056d815b73f7750c4634f0352a053ce9b55de04002494b56ad0219","submittingOrgMspId":"Org1MSP","coAttestingOrgs":["Org1MSP","Org2MSP"],"timestamp":"2026-08-21T15:10:49.491299Z"}
+### RUN2 STEP F: CloseRecall on COMP-Z3 (resolution goes to recallStatus, lifecycle status untouched) ###
+-- COMP-Z3, not COMP-Z1: BATCH-Z2 (recalled in Step E) contains COMP-Z3 and PRODUCT-Z, not COMP-Z1/COMP-Z2 (those are BATCH-Z1 only) --
+[34m2026-08-21 16:11:29.858 BST 0001 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 payload:"{\"componentId\":\"COMP-Z3\",\"lifecycleStatus\":\"DELIVERED\",\"recallStatus\":\"REPAIRED\",\"txId\":\"edf4703b4389bcefaf002a39f6154380882cb1a3d6dd2c080ee1fa1492e0f328\"}" 
+-- QUERY COMP-Z3 (expect recallStatus=REPAIRED, status STILL DELIVERED) --
+{"docType":"component","tokenId":"COMP-Z3","batchId":"BATCH-Z2","status":"DELIVERED","recallStatus":"REPAIRED","owner":"DealerZ","dataHash":"9c65a4880cc3744cfc9cda52091c18e6871308abd39cbc475d251ae57ece60b6","submittingOrgMspId":"Org1MSP","coAttestingOrgs":["Org1MSP","Org2MSP"],"timestamp":"2026-08-21T15:11:08.042645Z","reason":"seatbelt tensioner fault","reasonHistory":["CLOSED(REPAIRED): dealer repaired tensioner [tx:edf4703b4389bcefaf002a39f6154380882cb1a3d6dd2c080ee1fa1492e0f328]"]}
+### RUN2 STEP G: ReviseRecallReason on BATCH-Z2 (amend, not overwrite; COMP-Z3 already closed so excluded) ###
+[34m2026-08-21 16:11:32.981 BST 0001 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 payload:"{\"amendedCount\":1,\"batchId\":\"BATCH-Z2\",\"txId\":\"2d4733319cd9dff0969318b85bb89b40a5d48f57c2d39299faf990c6f112ef96\"}" 
+-- QUERY PRODUCT-Z (still RECALLED, expect amendment appended) and COMP-Z3 (already REPAIRED, expect NOT amended) --
+{"docType":"product","tokenId":"PRODUCT-Z","batchId":"BATCH-Z1","componentBatches":["BATCH-Z1","BATCH-Z2"],"recipeId":"RECIPE-STD","status":"DELIVERED","recallStatus":"RECALLED","owner":"DealerZ","submittingOrgMspId":"Org1MSP","coAttestingOrgs":["Org1MSP","Org2MSP"],"timestamp":"2026-08-21T15:11:17.296851Z","reason":"seatbelt tensioner fault","reasonHistory":["AMENDED by Org1MSP: root cause confirmed as torque spec, not tensioner [tx:2d4733319cd9dff0969318b85bb89b40a5d48f57c2d39299faf990c6f112ef96]"],"components":["COMP-Z1","COMP-Z2","COMP-Z3"]}
+{"docType":"component","tokenId":"COMP-Z3","batchId":"BATCH-Z2","status":"DELIVERED","recallStatus":"REPAIRED","owner":"DealerZ","dataHash":"9c65a4880cc3744cfc9cda52091c18e6871308abd39cbc475d251ae57ece60b6","submittingOrgMspId":"Org1MSP","coAttestingOrgs":["Org1MSP","Org2MSP"],"timestamp":"2026-08-21T15:11:08.042645Z","reason":"seatbelt tensioner fault","reasonHistory":["CLOSED(REPAIRED): dealer repaired tensioner [tx:edf4703b4389bcefaf002a39f6154380882cb1a3d6dd2c080ee1fa1492e0f328]"]}
+### RUN2 STEP H: Negative - OEM (Org1) attempts the Regulator-only RevokeRecall, expect rejection ###
+Error: endorsement failure during invoke. response: status:500 message:"revokeRecall rejected: caller org must be RegulatorMSP, got Org1MSP" 
+### RUN2 STEP I: RevokeRecall by Org3 (Regulator) on BATCH-Z2 ###
+-- COMP-Z3 was already resolved via CloseRecall (recallStatus=REPAIRED, not RECALLED), so this only revokes PRODUCT-Z --
+-- expect PRODUCT-Z recallStatus cleared to empty AND status still DELIVERED, not reset to a generic ACTIVE value --
+[34m2026-08-21 16:11:39.195 BST 0001 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 payload:"{\"batchId\":\"BATCH-Z2\",\"revokedCount\":1,\"txId\":\"24041346919ba38f461865ea70730a54bd649263356b8369bb8293b5275e51ec\"}" 
+{"docType":"product","tokenId":"PRODUCT-Z","batchId":"BATCH-Z1","componentBatches":["BATCH-Z1","BATCH-Z2"],"recipeId":"RECIPE-STD","status":"DELIVERED","owner":"DealerZ","submittingOrgMspId":"Org1MSP","coAttestingOrgs":["Org1MSP","Org2MSP"],"timestamp":"2026-08-21T15:11:17.296851Z","reason":"seatbelt tensioner fault","reasonHistory":["AMENDED by Org1MSP: root cause confirmed as torque spec, not tensioner [tx:2d4733319cd9dff0969318b85bb89b40a5d48f57c2d39299faf990c6f112ef96]","REVOKED by Org3MSP: root cause traced to a different supplier batch [tx:24041346919ba38f461865ea70730a54bd649263356b8369bb8293b5275e51ec] (lifecycle status DELIVERED untouched)"],"components":["COMP-Z1","COMP-Z2","COMP-Z3"]}
+-- QUERY COMP-Z3 again (expect recallStatus still REPAIRED, untouched by the revoke) --
+{"docType":"component","tokenId":"COMP-Z3","batchId":"BATCH-Z2","status":"DELIVERED","recallStatus":"REPAIRED","owner":"DealerZ","dataHash":"9c65a4880cc3744cfc9cda52091c18e6871308abd39cbc475d251ae57ece60b6","submittingOrgMspId":"Org1MSP","coAttestingOrgs":["Org1MSP","Org2MSP"],"timestamp":"2026-08-21T15:11:08.042645Z","reason":"seatbelt tensioner fault","reasonHistory":["CLOSED(REPAIRED): dealer repaired tensioner [tx:edf4703b4389bcefaf002a39f6154380882cb1a3d6dd2c080ee1fa1492e0f328]"]}
+### RUN2 STEP J: ProvenanceCheck (formerly CounterfeitScan) on genuine vs fabricated ID ###
+{"coAttestingOrgs":["Org1MSP","Org2MSP"],"componentId":"COMP-Z1","lifecycleStatus":"DELIVERED","note":"confirms ledger registration and declared co-attestation only; does not by itself prove the physical item being scanned is the genuine, unaltered original","recallStatus":"","registeredOnLedger":true,"result":"REGISTERED_WITH_SUFFICIENT_ATTESTATION"}
+{"componentId":"COMP-FAKE-9999","registeredOnLedger":false,"result":"NOT_FOUND"}
+### DONE RUN2 ###

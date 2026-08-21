@@ -22,8 +22,9 @@ type SmartContract struct {
 // ComponentToken is the on-chain record for a single component or an
 // assembled product.
 //
-// Two fields deserve special note because they were previously a source of
-// confusion between "cryptographic proof" and "self-reported business data":
+// Three fields deserve special note because they were previously a source of
+// confusion between "cryptographic proof" and "self-reported business data",
+// or between two logically distinct notions of "status":
 //
 //   - SubmittingOrgMSP is the MSP ID of the client identity that actually
 //     submitted this transaction. Fabric verifies this cryptographically via
@@ -37,20 +38,35 @@ type SmartContract struct {
 //     and validation system before a transaction ever commits, entirely
 //     outside this code's control. A caller could in principle list an org
 //     that did not genuinely co-attest. Treat CoAttestingOrgs as a
-//     business-level annotation, not a security control.
+//     business-level annotation, not a security control. Genuine peer
+//     endorsement is never derived from this field; it is enforced
+//     separately, before this code ever runs, by the channel's endorsement
+//     policy and Fabric's signature verification over each peer's simulated
+//     response.
+//   - Status is the component's lifecycle position (MANUFACTURED,
+//     QC_PASSED, SHIPPED, ASSEMBLED, DELIVERED) and is never set to
+//     RECALLED. RecallStatus is a separate field for exactly this reason:
+//     an earlier version of this chaincode overwrote Status with RECALLED
+//     and then, on revocation, reset it to a generic ACTIVE value, silently
+//     destroying whatever lifecycle stage the token had actually reached
+//     (was it DELIVERED? still ASSEMBLED?). Keeping the two fields apart
+//     means a recall can be triggered, resolved, or revoked without ever
+//     touching the lifecycle history the rest of the system depends on.
 //
 // Ledger registration (this struct existing at TokenID) also only proves
 // that *some* authorised client wrote this record; it does not, by itself,
 // prove that the physical component being scanned in the real world is the
-// genuine article the record describes (see CounterfeitScan's doc comment).
+// genuine article the record describes (see ProvenanceCheck's doc comment).
 type ComponentToken struct {
 	DocType          string    `json:"docType"` // "component" or "product"
 	TokenID          string    `json:"tokenId"`
-	BatchID          string    `json:"batchId"`
+	BatchID          string    `json:"batchId"` // component: its one batch; product: its lowest-sorted constituent batch, see ComponentBatches
+	ComponentBatches []string  `json:"componentBatches,omitempty"` // product tokens only: every distinct batch among the assembled components (see RecordAssembly)
 	RecipeID         string    `json:"recipeId,omitempty"`
-	Status           string    `json:"status"` // MANUFACTURED, QC_PASSED, SHIPPED, ASSEMBLED, DELIVERED, RECALLED, REPAIRED, REPLACED, RETIRED
+	Status           string    `json:"status"` // lifecycle only: MANUFACTURED, QC_PASSED, SHIPPED, ASSEMBLED, DELIVERED (never RECALLED; see RecallStatus)
+	RecallStatus     string    `json:"recallStatus,omitempty"` // "" (never recalled), RECALLED, or a CloseRecall resolution (REPAIRED, REPLACED, RETIRED); independent of Status
 	Owner            string    `json:"owner"`
-	DataHash         string    `json:"dataHash,omitempty"` // SHA-256 hex digest of the off-chain test report
+	DataHash         string    `json:"dataHash,omitempty"` // SHA-256 hex digest, computed client-side and submitted as a digest only (see RegisterComponent)
 	SubmittingOrgMSP string    `json:"submittingOrgMspId"` // cryptographically verified by Fabric for this transaction
 	CoAttestingOrgs  []string  `json:"coAttestingOrgs"`    // self-declared, not independently verified (see type doc comment)
 	Timestamp        time.Time `json:"timestamp"`          // from ctx.GetStub().GetTxTimestamp(), not time.Now()
@@ -115,10 +131,13 @@ func txTimestamp(ctx contractapi.TransactionContextInterface) (time.Time, error)
 //	CHECK:  GetState(componentID) == nil (reject if already registered)
 //	CREATE TOKEN -> PutState -> maintain batch~component index -> EMIT ComponentRegistered
 func (s *SmartContract) RegisterComponent(ctx contractapi.TransactionContextInterface,
-	componentID string, batchID string, supplierID string, testReport string, coAttestingOrgsCSV string) error {
+	componentID string, batchID string, supplierID string, testReportHash string, coAttestingOrgsCSV string) error {
 
 	if componentID == "" || batchID == "" {
 		return fmt.Errorf("registerComponent rejected: componentID and batchID are required")
+	}
+	if err := requireHashLike(testReportHash); err != nil {
+		return fmt.Errorf("registerComponent rejected: %v", err)
 	}
 
 	callerMSP, coAttestors, err := recordCoAttestation(ctx, splitCSV(coAttestingOrgsCSV))
@@ -147,7 +166,7 @@ func (s *SmartContract) RegisterComponent(ctx contractapi.TransactionContextInte
 		BatchID:          batchID,
 		Status:           "MANUFACTURED",
 		Owner:            supplierID,
-		DataHash:         hashHex(testReport),
+		DataHash:         testReportHash,
 		SubmittingOrgMSP: callerMSP,
 		CoAttestingOrgs:  coAttestors,
 		Timestamp:        ts,
@@ -158,16 +177,26 @@ func (s *SmartContract) RegisterComponent(ctx contractapi.TransactionContextInte
 	return s.addToBatchIndex(ctx, batchID, componentID)
 }
 
-// RecordTest commits the off-chain QC test report's hash on-chain. Requires
-// the component to currently be MANUFACTURED, so a component cannot be
-// tested twice or tested before it exists.
-func (s *SmartContract) RecordTest(ctx contractapi.TransactionContextInterface, componentID string, testReport string, coAttestingOrgsCSV string) error {
+// RecordTest commits the off-chain QC test report's hash on-chain. The
+// caller computes the SHA-256 digest of the report itself and submits only
+// the hex digest as testReportHash; the report text is never sent to, or
+// seen by, this chaincode (see the on-chain/off-chain boundary discussion,
+// dissertation Section 3.6). Requires the component to currently be
+// MANUFACTURED, so a component cannot be tested twice or tested before it
+// exists.
+func (s *SmartContract) RecordTest(ctx contractapi.TransactionContextInterface, componentID string, testReportHash string, coAttestingOrgsCSV string) error {
 	token, err := s.mustGetToken(ctx, componentID)
 	if err != nil {
 		return err
 	}
 	if err := requireStatus(token, "MANUFACTURED"); err != nil {
 		return err
+	}
+	if err := requireNotRecalled(token); err != nil {
+		return err
+	}
+	if err := requireHashLike(testReportHash); err != nil {
+		return fmt.Errorf("recordTest rejected: %v", err)
 	}
 	callerMSP, coAttestors, err := recordCoAttestation(ctx, splitCSV(coAttestingOrgsCSV))
 	if err != nil {
@@ -176,7 +205,7 @@ func (s *SmartContract) RecordTest(ctx contractapi.TransactionContextInterface, 
 	if len(coAttestors) < minCoAttestingOrgs {
 		return fmt.Errorf("recordTest rejected: needs >=%d co-attesting orgs", minCoAttestingOrgs)
 	}
-	token.DataHash = hashHex(testReport)
+	token.DataHash = testReportHash
 	token.SubmittingOrgMSP = callerMSP
 	token.CoAttestingOrgs = coAttestors
 	token.Status = "QC_PASSED"
@@ -191,6 +220,9 @@ func (s *SmartContract) RecordShipment(ctx contractapi.TransactionContextInterfa
 		return err
 	}
 	if err := requireStatus(token, "QC_PASSED"); err != nil {
+		return err
+	}
+	if err := requireNotRecalled(token); err != nil {
 		return err
 	}
 	if err := requireOwner(token, fromOwner); err != nil {
@@ -213,8 +245,20 @@ func (s *SmartContract) RecordShipment(ctx contractapi.TransactionContextInterfa
 // RecordAssembly combines component tokens into a single product token (the
 // "Token Recipe" pattern). Every listed component must currently be SHIPPED
 // and not already used in another assembly; the product ID must not already
-// exist. All components must additionally share the same batch, since a
-// mixed-batch assembly would make batch-scoped recall ambiguous.
+// exist.
+//
+// Components are deliberately NOT required to share one batch: a real
+// automotive product is routinely assembled from parts sourced from several
+// suppliers and several production batches (Batch -> Component ->
+// Product/Vehicle -> Dealer, not one Batch -> one Product). An earlier
+// version of this chaincode rejected any assembly whose components spanned
+// more than one batch; that made the demonstration simpler but did not
+// represent a real supply chain, and would have silently hidden a recalled
+// component if it happened to sit inside a multi-batch product. The product
+// token instead records every distinct batch its components were drawn from
+// in ComponentBatches, and is indexed under all of them, so that recalling
+// ANY one of those batches (TriggerRecall) correctly finds and recalls the
+// product too, not only products whose components all share one batch.
 func (s *SmartContract) RecordAssembly(ctx contractapi.TransactionContextInterface, productID string, componentIDsCSV string, recipeID string, coAttestingOrgsCSV string) error {
 	if productID == "" {
 		return fmt.Errorf("recordAssembly rejected: productID is required")
@@ -242,8 +286,8 @@ func (s *SmartContract) RecordAssembly(ctx contractapi.TransactionContextInterfa
 
 	seen := map[string]bool{}
 	tokens := make([]*ComponentToken, 0, len(componentIDs))
-	var batchID string
-	for i, cid := range componentIDs {
+	batchSet := map[string]bool{}
+	for _, cid := range componentIDs {
 		if seen[cid] {
 			return fmt.Errorf("recordAssembly rejected: component %s listed more than once", cid)
 		}
@@ -256,13 +300,17 @@ func (s *SmartContract) RecordAssembly(ctx contractapi.TransactionContextInterfa
 		if err := requireStatus(tok, "SHIPPED"); err != nil {
 			return fmt.Errorf("recordAssembly rejected for component %s: %v", cid, err)
 		}
-		if i == 0 {
-			batchID = tok.BatchID
-		} else if tok.BatchID != batchID {
-			return fmt.Errorf("recordAssembly rejected: component %s is from batch %s, expected %s (mixed-batch assembly is not permitted)", cid, tok.BatchID, batchID)
+		if err := requireNotRecalled(tok); err != nil {
+			return fmt.Errorf("recordAssembly rejected for component %s: %v", cid, err)
 		}
+		batchSet[tok.BatchID] = true
 		tokens = append(tokens, tok)
 	}
+	componentBatches := make([]string, 0, len(batchSet))
+	for b := range batchSet {
+		componentBatches = append(componentBatches, b)
+	}
+	sort.Strings(componentBatches)
 
 	// Only mutate world state after every precondition above has passed, so
 	// a rejected assembly never leaves some components half-updated.
@@ -281,7 +329,8 @@ func (s *SmartContract) RecordAssembly(ctx contractapi.TransactionContextInterfa
 	product := ComponentToken{
 		DocType:          "product",
 		TokenID:          productID,
-		BatchID:          batchID,
+		BatchID:          componentBatches[0], // primary/lowest-sorted batch, for display only; ComponentBatches is authoritative
+		ComponentBatches: componentBatches,
 		RecipeID:         recipeID,
 		Status:           "ASSEMBLED",
 		Owner:            oemOrgMSP,
@@ -293,7 +342,14 @@ func (s *SmartContract) RecordAssembly(ctx contractapi.TransactionContextInterfa
 	if err := s.putToken(ctx, &product, "AssemblyRecorded"); err != nil {
 		return err
 	}
-	return s.addToBatchIndex(ctx, batchID, productID)
+	// Index the product under every batch it draws components from, so a
+	// recall of any one of those batches finds this product too.
+	for _, b := range componentBatches {
+		if err := s.addToBatchIndex(ctx, b, productID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // RecordDelivery sets the final owner to the dealer. Requires the product to
@@ -307,6 +363,9 @@ func (s *SmartContract) RecordDelivery(ctx contractapi.TransactionContextInterfa
 		return err
 	}
 	if err := requireStatus(token, "ASSEMBLED"); err != nil {
+		return err
+	}
+	if err := requireNotRecalled(token); err != nil {
 		return err
 	}
 	callerMSP, coAttestors, err := recordCoAttestation(ctx, splitCSV(coAttestingOrgsCSV))
@@ -354,8 +413,8 @@ func (s *SmartContract) RecordUsageLog(ctx contractapi.TransactionContextInterfa
 	if err != nil {
 		return err
 	}
-	if token.Status == "RECALLED" {
-		return fmt.Errorf("recordUsageLog rejected: component %s is currently RECALLED", componentID)
+	if err := requireNotRecalled(token); err != nil {
+		return err
 	}
 	callerMSP, coAttestors, err := recordCoAttestation(ctx, splitCSV(coAttestingOrgsCSV))
 	if err != nil {
@@ -398,17 +457,19 @@ func (s *SmartContract) WarrantyCheck(ctx contractapi.TransactionContextInterfac
 	return string(out), nil
 }
 
-// CounterfeitScan checks whether a token exists and was registered with the
+// ProvenanceCheck checks whether a token exists and was registered with the
 // required number of co-attesting organisations. Read-only.
 //
-// Important scope limitation, stated explicitly rather than only in prose
-// elsewhere: this function verifies ledger presence and co-attestation
-// count, not physical authenticity. A counterfeit manufacturer could copy a
-// genuine componentID onto a fake part; scanning that copied ID would still
-// return "registered" here, because this chaincode has no way to bind a
-// digital record to the specific physical object in front of the scanner.
-// The JSON field is named accordingly.
-func (s *SmartContract) CounterfeitScan(ctx contractapi.TransactionContextInterface, componentID string) (string, error) {
+// Named ProvenanceCheck rather than the earlier CounterfeitScan, because the
+// original name implied a stronger guarantee than the function actually
+// provides. Important scope limitation, stated explicitly rather than only
+// in prose elsewhere: this function verifies ledger presence and declared
+// co-attestation count, not physical authenticity. A counterfeit
+// manufacturer could copy a genuine componentID onto a fake part; scanning
+// that copied ID would still return "registered" here, because this
+// chaincode has no way to bind a digital record to the specific physical
+// object in front of the scanner. The JSON fields are named accordingly.
+func (s *SmartContract) ProvenanceCheck(ctx contractapi.TransactionContextInterface, componentID string) (string, error) {
 	bytes, err := ctx.GetStub().GetState(componentID)
 	if err != nil {
 		return "", fmt.Errorf("failed to read world state: %v", err)
@@ -431,12 +492,13 @@ func (s *SmartContract) CounterfeitScan(ctx contractapi.TransactionContextInterf
 		result = "REGISTERED_WITH_SUFFICIENT_ATTESTATION"
 	}
 	out, _ := json.Marshal(map[string]interface{}{
-		"componentId":         componentID,
-		"result":              result,
-		"registeredOnLedger":  true,
-		"coAttestingOrgs":     token.CoAttestingOrgs,
-		"status":              token.Status,
-		"note":                "confirms ledger registration and declared co-attestation only; does not by itself prove the physical item being scanned is the genuine, unaltered original",
+		"componentId":        componentID,
+		"result":             result,
+		"registeredOnLedger": true,
+		"coAttestingOrgs":    token.CoAttestingOrgs,
+		"lifecycleStatus":    token.Status,
+		"recallStatus":       token.RecallStatus,
+		"note":               "confirms ledger registration and declared co-attestation only; does not by itself prove the physical item being scanned is the genuine, unaltered original",
 	})
 	return string(out), nil
 }
@@ -482,10 +544,10 @@ func (s *SmartContract) TriggerRecall(ctx contractapi.TransactionContextInterfac
 		if err != nil {
 			return "", err
 		}
-		if token.Status == "RECALLED" {
+		if token.RecallStatus == "RECALLED" {
 			continue
 		}
-		token.Status = "RECALLED"
+		token.RecallStatus = "RECALLED"
 		token.Reason = reason
 		if err := s.putToken(ctx, token, ""); err != nil {
 			return "", err
@@ -531,16 +593,20 @@ func (s *SmartContract) TriggerRecall(ctx contractapi.TransactionContextInterfac
 }
 
 // CloseRecall moves a single component from RECALLED to a terminal
-// resolution state. The original recall Reason is left untouched; the
-// resolution is appended to ReasonHistory so the full timeline stays on the
-// ledger instead of being overwritten.
+// resolution state (REPAIRED, REPLACED, or RETIRED). This resolution is
+// recorded in RecallStatus, not Status: the component's lifecycle status
+// (e.g. DELIVERED) is left exactly as it was, since a recall and its
+// resolution are events layered on top of the lifecycle, not replacements
+// for it. The original recall Reason is also left untouched; the resolution
+// is appended to ReasonHistory so the full timeline stays on the ledger
+// instead of being overwritten.
 func (s *SmartContract) CloseRecall(ctx contractapi.TransactionContextInterface, componentID string, resolution string, note string, coAttestingOrgsCSV string) (string, error) {
 	token, err := s.mustGetToken(ctx, componentID)
 	if err != nil {
 		return "", err
 	}
-	if err := requireStatus(token, "RECALLED"); err != nil {
-		return "", err
+	if token.RecallStatus != "RECALLED" {
+		return "", fmt.Errorf("closeRecall rejected: token %s is not currently RECALLED (recall status %q)", componentID, token.RecallStatus)
 	}
 	callerMSP, coAttestors, err := recordCoAttestation(ctx, splitCSV(coAttestingOrgsCSV))
 	if err != nil {
@@ -554,14 +620,14 @@ func (s *SmartContract) CloseRecall(ctx contractapi.TransactionContextInterface,
 	}
 
 	txID := ctx.GetStub().GetTxID()
-	token.Status = resolution
+	token.RecallStatus = resolution
 	token.SubmittingOrgMSP = callerMSP
 	token.CoAttestingOrgs = coAttestors
 	token.ReasonHistory = append(token.ReasonHistory, fmt.Sprintf("CLOSED(%s): %s [tx:%s]", resolution, note, txID))
 	if err := s.putToken(ctx, token, "RecallClosed"); err != nil {
 		return "", err
 	}
-	out, _ := json.Marshal(map[string]interface{}{"componentId": componentID, "newStatus": resolution, "txId": txID})
+	out, _ := json.Marshal(map[string]interface{}{"componentId": componentID, "lifecycleStatus": token.Status, "recallStatus": resolution, "txId": txID})
 	return string(out), nil
 }
 
@@ -587,7 +653,7 @@ func (s *SmartContract) ReviseRecallReason(ctx contractapi.TransactionContextInt
 		if err != nil {
 			return "", err
 		}
-		if token.Status != "RECALLED" {
+		if token.RecallStatus != "RECALLED" {
 			continue
 		}
 		token.ReasonHistory = append(token.ReasonHistory, fmt.Sprintf("AMENDED by %s: %s [tx:%s]", callerMSP, amendedReason, txID))
@@ -603,8 +669,15 @@ func (s *SmartContract) ReviseRecallReason(ctx contractapi.TransactionContextInt
 	return string(out), nil
 }
 
-// RevokeRecall reverts every RECALLED token in a batch back to ACTIVE. This
-// is deliberately restricted to RegulatorMSP only (not the OEM), so the OEM
+// RevokeRecall clears RecallStatus on every RECALLED token in a batch,
+// restoring visibility of whatever lifecycle status (Status) the token
+// actually had, since that field was never touched by TriggerRecall in the
+// first place. An earlier version of this chaincode instead overwrote
+// Status with a generic ACTIVE value on revocation, silently destroying the
+// information that the token had, for example, already been DELIVERED
+// before the recall; this version cannot lose that information because
+// recall and lifecycle are tracked in separate fields. This function is
+// deliberately restricted to RegulatorMSP only (not the OEM), so the OEM
 // cannot unilaterally cancel its own recall. The fact that a recall happened
 // and was later revoked stays visible via ReasonHistory and GetHistory().
 func (s *SmartContract) RevokeRecall(ctx contractapi.TransactionContextInterface, batchID string, justification string) (string, error) {
@@ -627,11 +700,11 @@ func (s *SmartContract) RevokeRecall(ctx contractapi.TransactionContextInterface
 		if err != nil {
 			return "", err
 		}
-		if token.Status != "RECALLED" {
+		if token.RecallStatus != "RECALLED" {
 			continue
 		}
-		token.Status = "ACTIVE"
-		token.ReasonHistory = append(token.ReasonHistory, fmt.Sprintf("REVOKED by %s: %s [tx:%s]", callerMSP, justification, txID))
+		token.RecallStatus = ""
+		token.ReasonHistory = append(token.ReasonHistory, fmt.Sprintf("REVOKED by %s: %s [tx:%s] (lifecycle status %s untouched)", callerMSP, justification, txID, token.Status))
 		if err := s.putToken(ctx, token, ""); err != nil {
 			return "", err
 		}
@@ -704,6 +777,39 @@ func requireStatus(token *ComponentToken, expected string) error {
 func requireOwner(token *ComponentToken, expectedOwner string) error {
 	if expectedOwner != "" && token.Owner != expectedOwner {
 		return fmt.Errorf("invalid caller: token %s is owned by %s, not %s", token.TokenID, token.Owner, expectedOwner)
+	}
+	return nil
+}
+
+// requireNotRecalled blocks ordinary lifecycle-mutating functions
+// (RecordTest, RecordShipment, RecordAssembly, RecordDelivery,
+// RecordUsageLog) from operating on a token whose RecallStatus is
+// currently RECALLED. This check exists precisely because RecallStatus and
+// Status are now separate fields (see the ComponentToken doc comment): once
+// a recall no longer overwrites Status, nothing else would otherwise stop a
+// recalled component continuing to move through its ordinary lifecycle.
+func requireNotRecalled(token *ComponentToken) error {
+	if token.RecallStatus == "RECALLED" {
+		return fmt.Errorf("invalid state transition: token %s is currently RECALLED (lifecycle status %s); resolve (CloseRecall) or revoke (RevokeRecall) the recall before recording further lifecycle events", token.TokenID, token.Status)
+	}
+	return nil
+}
+
+// requireHashLike performs a light sanity check that a client-supplied
+// digest looks like a SHA-256 hex string (64 lowercase hex characters). It
+// intentionally cannot verify the digest was actually computed from any
+// particular document, since this chaincode never receives the document
+// itself: the caller is expected to hash the off-chain report client-side
+// and submit only the resulting digest (see RegisterComponent, RecordTest,
+// and the on-chain/off-chain boundary discussion in the dissertation).
+func requireHashLike(s string) error {
+	if len(s) != 64 {
+		return fmt.Errorf("expected a 64-character SHA-256 hex digest, got length %d", len(s))
+	}
+	for _, r := range s {
+		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f')) {
+			return fmt.Errorf("expected lowercase hex characters only in the digest")
+		}
 	}
 	return nil
 }

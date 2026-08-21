@@ -3,3 +3,4 @@ component-traceability-chaincode-new
 component_traceability
 *.log.tmp
 .DS_Store
+chaincode/component-traceability-chaincode

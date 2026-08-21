@@ -16,13 +16,39 @@ manufacturer.
 ## What is actually in this repo
 
 - `chaincode/component_traceability.go` — the full Go chaincode (Fabric
-  Contract API v2). This is the fixed version described in the
-  dissertation's Scenario Analysis: real `crypto/sha256` hashing,
-  deterministic (sorted) co-attestation lists, a `batch~component`
-  composite-key index instead of a CouchDB rich query inside
-  `TriggerRecall`, a single aggregated event per transaction, and
-  explicit state-transition / ownership checks on every lifecycle
-  function.
+  Contract API v2). This is the hardened version described in the
+  dissertation's Scenario Analysis and Methodology chapters:
+  - Client-side hashing: `RegisterComponent`/`RecordTest` take a
+    caller-computed SHA-256 hex digest (`testReportHash`), never the
+    report text itself, so the report cannot leak through a transaction
+    proposal (an earlier version hashed the full report text inside the
+    chaincode).
+  - Cross-batch product assembly: `RecordAssembly` no longer requires
+    every component to share one batch. A product records every distinct
+    batch its components were drawn from in `componentBatches` and is
+    indexed under all of them, so a recall of *any* one of those batches
+    still finds it (an earlier version rejected any assembly whose
+    components spanned more than one batch, which does not represent a
+    real automotive product built from multiple suppliers/batches).
+  - Separate recall and lifecycle status: `status` is the lifecycle
+    position only (MANUFACTURED…DELIVERED) and is never overwritten by a
+    recall. `recallStatus` is a distinct field for RECALLED and its
+    resolutions (REPAIRED/REPLACED/RETIRED); `RevokeRecall` clears
+    `recallStatus` without ever touching `status` (an earlier version
+    overwrote `status` with RECALLED and then reset it to a generic
+    ACTIVE value on revocation, destroying whatever lifecycle stage —
+    e.g. DELIVERED — the token had actually reached).
+  - `ProvenanceCheck` (renamed from `CounterfeitScan`): the original name
+    implied a stronger guarantee — physical authenticity — than the
+    function actually verifies (ledger presence and declared
+    co-attestation only).
+  - Real `crypto/sha256` hashing, deterministic (sorted) co-attestation
+    lists, a `batch~component` composite-key index instead of a CouchDB
+    rich query inside `TriggerRecall`, a single aggregated event per
+    transaction, and explicit state-transition / ownership checks on
+    every lifecycle function, including a `requireNotRecalled` guard so a
+    token under recall cannot continue moving through its ordinary
+    lifecycle.
 - `scripts/scenario_1_timing_lesson.sh` — the first real test run against
   a live 2-org Fabric test-network. Several steps in this run fail
   because `peer chaincode invoke` returns as soon as a transaction is
@@ -55,7 +81,12 @@ manufacturer.
   that does not need a real peer to verify: real-SHA-256 hashing,
   duplicate-ID rejection, insufficient-co-attestation rejection, invalid
   state-transition rejection, deterministic sorted co-attestation
-  ordering, unauthorised-caller rejection, and unknown-batch rejection.
+  ordering, unauthorised-caller rejection, unknown-batch rejection,
+  cross-batch product assembly, a recall reaching a product via any one of
+  its constituent batches, recall preserving lifecycle status, revoke
+  restoring the original lifecycle status (not a generic placeholder), a
+  recalled token being blocked from further lifecycle progression, and
+  `ProvenanceCheck` distinguishing a registered token from an unknown one.
   These are unit tests against a hand-rolled in-memory fake of the
   `ChaincodeStubInterface`/`ClientIdentity` methods this chaincode
   actually calls; they check the same logic the real-network evidence in
@@ -63,6 +94,19 @@ manufacturer.
   do **not** replace that real-network evidence — a unit test cannot
   observe real multi-peer endorsement, MVCC conflicts, or the
   asynchronous-commit behaviour documented in `evidence/`.
+
+  **A genuine gap was found and fixed while adding these tests, worth
+  recording rather than quietly correcting**: the fake stub's composite-key
+  emulation joined and split keys on a literal `~`, which collides with the
+  `~` already inside this chaincode's own object-type constant
+  (`batch~component`). Every existing test that exercised `TriggerRecall`
+  only checked *rejection* paths, so this defect silently meant no unit
+  test had ever exercised `TriggerRecall` actually finding and recalling a
+  real token — only the genuine Fabric network (whose real composite-key
+  encoding has no such collision) had ever exercised that path. The fake
+  now uses a delimiter that cannot appear in ordinary object-type or
+  attribute strings, matching Fabric's own approach, and the tests above
+  now exercise the previously-blind path directly.
 - `simulator/traceability-simulator.html` — the self-contained,
   browser-based JavaScript behavioural simulator referenced in the
   dissertation's Methodology chapter as historical/development-phase
@@ -127,19 +171,24 @@ cd fabric-samples/test-network
 
 | Function | Endorsement | Purpose |
 |---|---|---|
-| `RegisterComponent` | ≥2 distinct orgs | Mint a new component token; rejects duplicate IDs |
-| `RecordTest` | ≥2 distinct orgs; requires status `MANUFACTURED` | Commit QC test-report hash; status → `QC_PASSED` |
-| `RecordShipment` | ≥2 distinct orgs; requires status `QC_PASSED` and matching current owner | Transfer custody; status → `SHIPPED` |
-| `RecordAssembly` | ≥2 distinct orgs; every listed component must be `SHIPPED` and share one batch | Combine components into a product token; status → `ASSEMBLED` |
-| `RecordDelivery` | ≥2 distinct orgs; requires status `ASSEMBLED`; cascades to every component | Final transfer to dealer; status → `DELIVERED` |
-| `RecordUsageLog` | ≥2 distinct orgs | Attach field telemetry to a token |
+| `RegisterComponent` | ≥2 distinct orgs | Mint a new component token; rejects duplicate IDs; takes a client-computed SHA-256 hash of the report, not the report text |
+| `RecordTest` | ≥2 distinct orgs; requires status `MANUFACTURED`; rejects if currently RECALLED | Commit client-hashed QC test-report digest; status → `QC_PASSED` |
+| `RecordShipment` | ≥2 distinct orgs; requires status `QC_PASSED`, matching current owner, and not currently RECALLED | Transfer custody; status → `SHIPPED` |
+| `RecordAssembly` | ≥2 distinct orgs; every listed component must be `SHIPPED` and not currently RECALLED (components may span multiple batches) | Combine components into a product token, recording every distinct constituent batch in `componentBatches`; status → `ASSEMBLED` |
+| `RecordDelivery` | ≥2 distinct orgs; requires status `ASSEMBLED` and not currently RECALLED; cascades to every component | Final transfer to dealer; status → `DELIVERED` |
+| `RecordUsageLog` | ≥2 distinct orgs; rejects if currently RECALLED | Attach field telemetry to a token |
 | `WarrantyCheck` | Read-only | Apply a threshold rule to usage data |
-| `CounterfeitScan` | Read-only | Verify ledger registration + co-attestation count (not physical authenticity) |
-| `TriggerRecall` | Caller must be OEM or Regulator org | Batch-level recall via composite-key index; single aggregated event |
-| `CloseRecall` | ≥2 distinct orgs; requires status `RECALLED` | Resolve a recalled token to `REPAIRED`/`REPLACED`/`RETIRED` |
+| `ProvenanceCheck` (formerly `CounterfeitScan`) | Read-only | Verify ledger registration + declared co-attestation count (not physical authenticity) |
+| `TriggerRecall` | Caller must be OEM or Regulator org | Batch-level recall via composite-key index; sets `recallStatus` (never touches lifecycle `status`); single aggregated event; a product is found via *any* of its constituent batches |
+| `CloseRecall` | ≥2 distinct orgs; requires `recallStatus` = `RECALLED` | Resolve a recalled token's `recallStatus` to `REPAIRED`/`REPLACED`/`RETIRED`; lifecycle `status` is left untouched |
 | `ReviseRecallReason` | Caller must be OEM or Regulator org | Append an amendment to a batch's recall reason without overwriting it |
-| `RevokeRecall` | Caller must be Regulator org only | Revert a batch's `RECALLED` tokens to `ACTIVE` |
+| `RevokeRecall` | Caller must be Regulator org only | Clear a batch's `recallStatus` back to empty, restoring visibility of whatever lifecycle `status` the token actually had (not a generic placeholder) |
 | `GetHistory` | Read-only | Full on-chain version history of a token (`GetHistoryForKey`) |
+
+Every write function above that operates on an existing token also rejects
+the call outright if that token's `recallStatus` is currently `RECALLED`
+(`requireNotRecalled`), so a component under recall cannot continue moving
+through its ordinary lifecycle while the recall is open.
 
 ## Licence
 

@@ -30,23 +30,29 @@ inv() {
 qry() {
   peer chaincode query -C mychannel -n component-traceability -c "$1" 2>&1
 }
+# Reports are hashed client-side and only the digest is ever submitted to the
+# chaincode; the report text itself never appears in a transaction proposal.
+# See dissertation Section 3.6 (on-chain/off-chain boundary).
+h() {
+  printf '%s' "$1" | shasum -a 256 | awk '{print $1}'
+}
 
 as_org1
 
 echo "### STEP 1: Register target batch BATCH-T (5 components) ###"
 for i in 1 2 3 4 5; do
   echo "-- RegisterComponent COMP-T$i --"
-  inv "{\"function\":\"RegisterComponent\",\"Args\":[\"COMP-T$i\",\"BATCH-T\",\"Tier2Supplier\",\"QC report T$i\",\"Org2MSP\"]}"
+  inv "{\"function\":\"RegisterComponent\",\"Args\":[\"COMP-T$i\",\"BATCH-T\",\"Tier2Supplier\",\"$(h "QC report T$i")\",\"Org2MSP\"]}"
 done
 
 echo "### STEP 2: Register control batch BATCH-C (3 components, should NOT be recalled) ###"
 for i in 1 2 3; do
   echo "-- RegisterComponent COMP-C$i --"
-  inv "{\"function\":\"RegisterComponent\",\"Args\":[\"COMP-C$i\",\"BATCH-C\",\"Tier2Supplier\",\"QC report C$i\",\"Org2MSP\"]}"
+  inv "{\"function\":\"RegisterComponent\",\"Args\":[\"COMP-C$i\",\"BATCH-C\",\"Tier2Supplier\",\"$(h "QC report C$i")\",\"Org2MSP\"]}"
 done
 
 echo "### STEP 3: Full lifecycle for COMP-T1 -> RecordTest -> RecordShipment -> assemble -> deliver ###"
-inv '{"function":"RecordTest","Args":["COMP-T1","full QC pass report","Org2MSP"]}'
+inv "{\"function\":\"RecordTest\",\"Args\":[\"COMP-T1\",\"$(h "full QC pass report")\",\"Org2MSP\"]}"
 inv '{"function":"RecordShipment","Args":["COMP-T1","Tier2Supplier","Tier1Supplier","Org2MSP"]}'
 
 echo "-- RecordAssembly should REJECT (component still SHIPPED not the issue; but only 1 comp, status SHIPPED expected pass) --"
@@ -62,20 +68,20 @@ echo "### STEP 4: Negative case - RecordAssembly on a component that is NOT SHIP
 inv '{"function":"RecordAssembly","Args":["PRODUCT-BAD","COMP-T2","RECIPE-STD","Org2MSP"]}'
 
 echo "### STEP 5: Negative case - RecordShipment with wrong fromOwner ###"
-inv '{"function":"RecordTest","Args":["COMP-T3","QC pass","Org2MSP"]}'
+inv "{\"function\":\"RecordTest\",\"Args\":[\"COMP-T3\",\"$(h "QC pass")\",\"Org2MSP\"]}"
 inv '{"function":"RecordShipment","Args":["COMP-T3","WrongOwner","Tier1Supplier","Org2MSP"]}'
 
 echo "### STEP 6: Warranty scenario - usage log + check (two cases) ###"
-inv '{"function":"RecordTest","Args":["COMP-T4","QC pass","Org2MSP"]}'
+inv "{\"function\":\"RecordTest\",\"Args\":[\"COMP-T4\",\"$(h "QC pass")\",\"Org2MSP\"]}"
 inv '{"function":"RecordUsageLog","Args":["COMP-T4","92.0","Org2MSP"]}'
 qry '{"function":"WarrantyCheck","Args":["COMP-T4","85.0"]}'
 inv '{"function":"RecordUsageLog","Args":["COMP-T5","78.0","Org2MSP"]}'
 echo "-- expect fail: COMP-T5 never RegisterComponent'd test/usage before check consistency n/a --"
 qry '{"function":"WarrantyCheck","Args":["COMP-T5","85.0"]}'
 
-echo "### STEP 7: CounterfeitScan - genuine vs fabricated ID ###"
-qry '{"function":"CounterfeitScan","Args":["COMP-T1"]}'
-qry '{"function":"CounterfeitScan","Args":["COMP-FAKE-9999"]}'
+echo "### STEP 7: ProvenanceCheck (formerly CounterfeitScan) - genuine vs fabricated ID ###"
+qry '{"function":"ProvenanceCheck","Args":["COMP-T1"]}'
+qry '{"function":"ProvenanceCheck","Args":["COMP-FAKE-9999"]}'
 
 echo "### STEP 8: Negative case - unauthorized TriggerRecall caller (Org2 = Tier1Supplier, not OEM/Regulator) ###"
 as_org2
