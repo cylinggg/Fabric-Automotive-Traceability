@@ -70,7 +70,7 @@ which version.
   fix on delivery, batch recall, `CloseRecall`, and `ReviseRecallReason`.
   All transactions in this script are real, endorsed, committed Fabric
   transactions (see `evidence/real_fabric_run2_full_scenario.log`).
-- `evidence/` — unedited console output of seven separate runs, captured
+- `evidence/` — unedited console output of eight separate runs, captured
   directly from `peer chaincode invoke`/`query` against a running network,
   not from any simulator:
   - `real_fabric_run1_timing_lesson.log` and
@@ -96,7 +96,17 @@ which version.
   - `real_fabric_run4_overlap_fix.log` (v2.1, the `RecallBatchID` fix: a
     product recalled under two different batches at once, proving that
     revoking the wrong batch leaves the real recall untouched while
-    revoking the right one clears it).
+    revoking the right one clears it);
+  - `benchmark_N10_raw.csv`, `benchmark_N100_raw.csv`,
+    `benchmark_N1000B_raw.csv`, `benchmark_run.log`, and
+    `benchmark_summary.txt` (v2.1, produced by
+    `scripts/benchmark_scale.sh`: a real commit-latency and
+    recall-processing-time benchmark at $N=10/100/1{,}000$ components per
+    batch, every `RegisterComponent` invoked with `--waitForEvent` so the
+    measured duration is genuine submit-to-commit latency; zero failures
+    across 1,110 registrations and three `TriggerRecall` calls; see the
+    dissertation's Scalability and Performance section for the reported
+    figures and their limits).
 - `chaincode/component_traceability_test.go` — Go unit tests (`go test
   ./...`, no Docker or live network required) covering the business logic
   that does not need a real peer to verify: real-SHA-256 hashing,

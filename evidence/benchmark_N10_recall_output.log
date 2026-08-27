@@ -1,0 +1,3 @@
+[34m2026-08-27 22:55:56.167 BST 0001 INFO[0m [chaincodeCmd] [34;1mClientWait[0m -> txid [599154021ebfac90b36620157972962a97bae138085744b4dc669cb17c8a7dae] committed with status (VALID) at localhost:9051
+[34m2026-08-27 22:55:56.167 BST 0002 INFO[0m [chaincodeCmd] [34;1mClientWait[0m -> txid [599154021ebfac90b36620157972962a97bae138085744b4dc669cb17c8a7dae] committed with status (VALID) at localhost:7051
+[34m2026-08-27 22:55:56.167 BST 0003 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 payload:"{\"affectedCount\":10,\"batchId\":\"BENCH-10\",\"notifiedOwners\":[\"Tier2Supplier\"],\"skippedOverlap\":[],\"txId\":\"599154021ebfac90b36620157972962a97bae138085744b4dc669cb17c8a7dae\"}" 

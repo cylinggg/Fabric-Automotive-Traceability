@@ -1,0 +1,15 @@
+--- N=10 batch=BENCH-10 ---
+registrations attempted: 10, failed: 0, failure_rate: 0.0000
+commit latency (successful invokes only): median=2.091s p95=2.206s min=2.084s max=2.206s
+TriggerRecall processing time for batch of 10: 2.107s (committed_valid=yes, affectedCount=10)
+
+--- N=100 batch=BENCH-100 ---
+registrations attempted: 100, failed: 0, failure_rate: 0.0000
+commit latency (successful invokes only): median=2.091s p95=2.115s min=2.076s max=2.201s
+TriggerRecall processing time for batch of 100: 2.245s (committed_valid=yes)
+
+--- N=1000 batch=BENCH-1000B ---
+registrations attempted: 1000, failed: 0, failure_rate: 0.0000
+commit latency (successful invokes only): median=2.093s p95=2.107s min=2.065s max=2.239s
+TriggerRecall processing time for batch of 1000: 3.461s (committed_valid=yes)
+
