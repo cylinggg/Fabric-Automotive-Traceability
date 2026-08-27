@@ -1,0 +1,29 @@
+=== Gap-fill evidence for Scenario 3 (component-traceability v2.0, sequence 2) ===
+Generated to replace two illustrative, unverified claims previously written in
+the dissertation's Scenario 3 text ("component COMP-1001 is already
+registered" and a 92C WARRANTY_VOID result), neither of which actually
+appeared in any of this repository's other evidence/*.log files. This log
+supplies the same two outcomes as real, unedited peer chaincode invoke/query
+output against the live network.
+
+  1. RegisterComponent duplicate-ID rejection: a second RegisterComponent
+     call using an identifier already on the ledger (COMP-DUP-1) is rejected.
+  2. WarrantyCheck: a component is taken through the full lifecycle to
+     DELIVERED, given a RecordUsageLog reading of 92C, and WarrantyCheck
+     against an 85C threshold returns WARRANTY_VOID with fault USER, with an
+     explicit wait after every state-changing call so the query reads
+     post-commit state (the same commit-timing lesson documented in
+     real_fabric_run1_timing_lesson.log / real_fabric_run2_full_scenario.log).
+### GAP-FILL 1: genuine RegisterComponent duplicate-ID rejection ###
+[34m2026-08-27 19:20:01.716 BST 0001 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 
+-- second RegisterComponent with the SAME ID, expect rejection --
+Error: endorsement failure during invoke. response: status:500 message:"registerComponent rejected: component COMP-DUP-1 is already registered" 
+### GAP-FILL 2: genuine WarrantyCheck result (with proper commit wait) ###
+[34m2026-08-27 19:20:07.911 BST 0001 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 
+[34m2026-08-27 19:20:10.991 BST 0001 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 
+[34m2026-08-27 19:20:14.067 BST 0001 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 
+[34m2026-08-27 19:20:17.145 BST 0001 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 
+[34m2026-08-27 19:20:20.228 BST 0001 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 
+[34m2026-08-27 19:20:23.319 BST 0001 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 
+-- WarrantyCheck at 92C vs 85C threshold --
+{"avgTempC":92,"componentId":"COMP-WARR-1","fault":"USER","result":"WARRANTY_VOID","thresholdC":85}

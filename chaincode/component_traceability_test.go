@@ -511,3 +511,102 @@ func TestTriggerRecall_UnknownBatchRejectedNotSilentZero(t *testing.T) {
 		t.Fatalf("TriggerRecall on an unregistered batch should return an error, not a silent zero-affected result")
 	}
 }
+
+// --- cross-batch overlapping recall campaigns (a product recalled under two
+// different batches at once must not let revoking one campaign clear the
+// other) ---
+
+func TestTriggerRecall_OverlappingCampaignDoesNotRelabelToken(t *testing.T) {
+	s := &SmartContract{}
+	stub := newFakeStub("tx1")
+	ctx := &fakeCtx{stub: stub, callerID: oemOrgMSP}
+
+	shipComponent(t, s, ctx, "COMP-OV1", "BATCH-OV-X")
+	shipComponent(t, s, ctx, "COMP-OV2", "BATCH-OV-Y")
+	if err := s.RecordAssembly(ctx, "PRODUCT-OV", "COMP-OV1,COMP-OV2", "RECIPE-OV", "Org2MSP"); err != nil {
+		t.Fatalf("setup RecordAssembly failed: %v", err)
+	}
+
+	// First campaign: BATCH-OV-X recalls the product (and COMP-OV1).
+	out, err := s.TriggerRecall(ctx, "BATCH-OV-X", "defect found in batch X")
+	if err != nil {
+		t.Fatalf("first TriggerRecall failed: %v", err)
+	}
+	if strings.Contains(out, `"affectedCount":0`) {
+		t.Fatalf("first TriggerRecall should have affected at least the product, got: %s", out)
+	}
+	product, err := s.mustGetToken(ctx, "PRODUCT-OV")
+	if err != nil || product.RecallBatchID != "BATCH-OV-X" {
+		t.Fatalf("expected product.RecallBatchID = BATCH-OV-X after first campaign, got %q (err=%v)", product.RecallBatchID, err)
+	}
+
+	// Second, independent campaign: BATCH-OV-Y also names the same product
+	// (it is a shared member of both batches). This must NOT relabel the
+	// product's RecallBatchID to BATCH-OV-Y, and must report it as an
+	// overlap rather than silently absorbing it into the new campaign.
+	out2, err := s.TriggerRecall(ctx, "BATCH-OV-Y", "unrelated defect found in batch Y")
+	if err != nil {
+		t.Fatalf("second TriggerRecall failed: %v", err)
+	}
+	if !strings.Contains(out2, "PRODUCT-OV") {
+		t.Fatalf("second TriggerRecall response should list PRODUCT-OV under skippedOverlap, got: %s", out2)
+	}
+	product, err = s.mustGetToken(ctx, "PRODUCT-OV")
+	if err != nil || product.RecallBatchID != "BATCH-OV-X" {
+		t.Fatalf("product.RecallBatchID should still be BATCH-OV-X after the overlapping second campaign, got %q (err=%v)", product.RecallBatchID, err)
+	}
+
+	// The critical fix: revoking BATCH-OV-Y (the campaign that never
+	// actually owned this token) must NOT clear the product's real,
+	// still-open BATCH-OV-X recall.
+	regCtx := &fakeCtx{stub: stub, callerID: regulatorOrgMSP}
+	if _, err := s.RevokeRecall(regCtx, "BATCH-OV-Y", "closing out batch Y investigation"); err != nil {
+		t.Fatalf("RevokeRecall(BATCH-OV-Y) failed: %v", err)
+	}
+	product, err = s.mustGetToken(ctx, "PRODUCT-OV")
+	if err != nil {
+		t.Fatalf("failed to read back product: %v", err)
+	}
+	if product.RecallStatus != "RECALLED" || product.RecallBatchID != "BATCH-OV-X" {
+		t.Fatalf("revoking BATCH-OV-Y must not clear the unrelated BATCH-OV-X recall; got RecallStatus=%q RecallBatchID=%q (this is exactly the cross-batch bug being tested)", product.RecallStatus, product.RecallBatchID)
+	}
+
+	// Revoking the correct batch (BATCH-OV-X) does clear it.
+	if _, err := s.RevokeRecall(regCtx, "BATCH-OV-X", "root cause resolved"); err != nil {
+		t.Fatalf("RevokeRecall(BATCH-OV-X) failed: %v", err)
+	}
+	product, err = s.mustGetToken(ctx, "PRODUCT-OV")
+	if err != nil || product.RecallStatus != "" || product.RecallBatchID != "" {
+		t.Fatalf("revoking the owning batch (BATCH-OV-X) should clear RecallStatus and RecallBatchID, got RecallStatus=%q RecallBatchID=%q (err=%v)", product.RecallStatus, product.RecallBatchID, err)
+	}
+}
+
+func TestReviseRecallReason_DoesNotAmendTokenOwnedByDifferentBatch(t *testing.T) {
+	s := &SmartContract{}
+	stub := newFakeStub("tx1")
+	ctx := &fakeCtx{stub: stub, callerID: oemOrgMSP}
+
+	shipComponent(t, s, ctx, "COMP-RV1", "BATCH-RV-X")
+	shipComponent(t, s, ctx, "COMP-RV2", "BATCH-RV-Y")
+	if err := s.RecordAssembly(ctx, "PRODUCT-RV", "COMP-RV1,COMP-RV2", "RECIPE-RV", "Org2MSP"); err != nil {
+		t.Fatalf("setup RecordAssembly failed: %v", err)
+	}
+	if _, err := s.TriggerRecall(ctx, "BATCH-RV-X", "defect X"); err != nil {
+		t.Fatalf("setup TriggerRecall(BATCH-RV-X) failed: %v", err)
+	}
+
+	// BATCH-RV-Y never actually owns the product's recall (it is still
+	// BATCH-RV-X's), so amending via BATCH-RV-Y must not touch it.
+	if _, err := s.ReviseRecallReason(ctx, "BATCH-RV-Y", "unrelated amendment"); err != nil {
+		t.Fatalf("ReviseRecallReason(BATCH-RV-Y) failed: %v", err)
+	}
+	product, err := s.mustGetToken(ctx, "PRODUCT-RV")
+	if err != nil {
+		t.Fatalf("failed to read back product: %v", err)
+	}
+	for _, entry := range product.ReasonHistory {
+		if strings.Contains(entry, "unrelated amendment") {
+			t.Fatalf("ReviseRecallReason(BATCH-RV-Y) must not amend a product actually recalled under BATCH-RV-X, got ReasonHistory: %v", product.ReasonHistory)
+		}
+	}
+}

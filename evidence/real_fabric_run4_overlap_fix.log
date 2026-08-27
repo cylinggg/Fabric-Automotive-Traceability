@@ -1,0 +1,54 @@
+=== component-traceability v2.1 (sequence 3) cross-batch overlap fix evidence ===
+Committed on the same local three-organisation Fabric test-network used
+throughout this repository, replacing v2.0/sequence 2. This run demonstrates
+a fix for a real gap identified after the v2.0 hardening pass: a product
+indexed under two different batches (Section 3.3, RecordAssembly) could be
+recalled by each batch independently, but RecallStatus was a single field
+with no record of which batch's campaign actually owned the current recall.
+RevokeRecall(batchID) cleared RecallStatus on every token reachable from
+batchID's index entries, including a product still genuinely under a
+DIFFERENT, unrelated batch's open recall -- silently clearing a recall the
+call had no authority over.
+
+Fix: a new RecallBatchID field records which batch's TriggerRecall call set
+the current RecallStatus. TriggerRecall no longer relabels a token already
+recalled under a different batch (reporting it separately as
+skippedOverlap); ReviseRecallReason and RevokeRecall now only touch tokens
+whose RecallBatchID matches the batch named in the call.
+
+This run: PRODUCT-OV is assembled from COMP-OV1 (BATCH-OV-X) and COMP-OV2
+(BATCH-OV-Y). BATCH-OV-X recalls it first (recallBatchId becomes
+BATCH-OV-X). BATCH-OV-Y's later, independent TriggerRecall call reports
+PRODUCT-OV under skippedOverlap rather than relabelling it. RevokeRecall on
+the WRONG batch (BATCH-OV-Y) leaves PRODUCT-OV's recall untouched
+(recallStatus still RECALLED, recallBatchId still BATCH-OV-X) -- this is the
+exact bug being fixed. RevokeRecall on the correct batch (BATCH-OV-X) then
+clears it, with lifecycle status (ASSEMBLED) preserved throughout.
+
+Console output below is unedited peer chaincode invoke/query output against
+the real network, captured in a single run.
+### Cross-batch overlapping recall: real-network proof ###
+-- register COMP-OV1 (BATCH-OV-X) and COMP-OV2 (BATCH-OV-Y), assemble into PRODUCT-OV --
+[34m2026-08-27 19:28:52.882 BST 0001 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 
+[34m2026-08-27 19:28:55.972 BST 0001 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 
+[34m2026-08-27 19:28:59.036 BST 0001 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 
+[34m2026-08-27 19:29:02.181 BST 0001 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 
+[34m2026-08-27 19:29:05.347 BST 0001 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 
+[34m2026-08-27 19:29:08.426 BST 0001 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 
+[34m2026-08-27 19:29:11.500 BST 0001 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 
+-- TriggerRecall BATCH-OV-X (first campaign) --
+[34m2026-08-27 19:29:14.585 BST 0001 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 payload:"{\"affectedCount\":2,\"batchId\":\"BATCH-OV-X\",\"notifiedOwners\":[\"Org1MSP\",\"PRODUCT-OV\"],\"skippedOverlap\":[],\"txId\":\"790036811a6773f27b1018487de68b7a2088d401135480518ed2dd60bc3df4c3\"}" 
+-- QUERY PRODUCT-OV (expect recallBatchId=BATCH-OV-X) --
+{"docType":"product","tokenId":"PRODUCT-OV","batchId":"BATCH-OV-X","componentBatches":["BATCH-OV-X","BATCH-OV-Y"],"recipeId":"RECIPE-OV","status":"ASSEMBLED","recallStatus":"RECALLED","recallBatchId":"BATCH-OV-X","owner":"Org1MSP","submittingOrgMspId":"Org1MSP","coAttestingOrgs":["Org1MSP","Org2MSP"],"timestamp":"2026-08-27T18:29:11.494223Z","reason":"defect in batch X","components":["COMP-OV1","COMP-OV2"]}
+-- TriggerRecall BATCH-OV-Y (second, overlapping campaign on the SAME product) --
+[34m2026-08-27 19:29:17.707 BST 0001 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 payload:"{\"affectedCount\":1,\"batchId\":\"BATCH-OV-Y\",\"notifiedOwners\":[\"PRODUCT-OV\"],\"skippedOverlap\":[\"PRODUCT-OV\"],\"txId\":\"9a2efe93b8ef78d915f6fa99fbec63590671a6d2ed1638918e3aacba7dd4ff24\"}" 
+-- QUERY PRODUCT-OV (expect recallBatchId STILL BATCH-OV-X, not overwritten) --
+{"docType":"product","tokenId":"PRODUCT-OV","batchId":"BATCH-OV-X","componentBatches":["BATCH-OV-X","BATCH-OV-Y"],"recipeId":"RECIPE-OV","status":"ASSEMBLED","recallStatus":"RECALLED","recallBatchId":"BATCH-OV-X","owner":"Org1MSP","submittingOrgMspId":"Org1MSP","coAttestingOrgs":["Org1MSP","Org2MSP"],"timestamp":"2026-08-27T18:29:11.494223Z","reason":"defect in batch X","components":["COMP-OV1","COMP-OV2"]}
+### CRITICAL TEST: RevokeRecall(BATCH-OV-Y) must NOT clear the real BATCH-OV-X recall ###
+[34m2026-08-27 19:29:36.728 BST 0001 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 payload:"{\"batchId\":\"BATCH-OV-Y\",\"revokedCount\":1,\"txId\":\"b7791fbd92dd60da7ace1e873d72d061a3f54fbcc1f4a4eb386df5bc1b46de68\"}" 
+-- QUERY PRODUCT-OV (expect recallStatus STILL RECALLED, recallBatchId STILL BATCH-OV-X) --
+{"docType":"product","tokenId":"PRODUCT-OV","batchId":"BATCH-OV-X","componentBatches":["BATCH-OV-X","BATCH-OV-Y"],"recipeId":"RECIPE-OV","status":"ASSEMBLED","recallStatus":"RECALLED","recallBatchId":"BATCH-OV-X","owner":"Org1MSP","submittingOrgMspId":"Org1MSP","coAttestingOrgs":["Org1MSP","Org2MSP"],"timestamp":"2026-08-27T18:29:11.494223Z","reason":"defect in batch X","components":["COMP-OV1","COMP-OV2"]}
+### Now revoke the CORRECT batch (BATCH-OV-X): expect it clears ###
+[34m2026-08-27 19:29:39.860 BST 0001 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 payload:"{\"batchId\":\"BATCH-OV-X\",\"revokedCount\":2,\"txId\":\"bc29968c8aad6988e9bfade7d646c512856f8be7dae4e38dac1db897fa347144\"}" 
+-- QUERY PRODUCT-OV (expect recallStatus/recallBatchId both cleared) --
+{"docType":"product","tokenId":"PRODUCT-OV","batchId":"BATCH-OV-X","componentBatches":["BATCH-OV-X","BATCH-OV-Y"],"recipeId":"RECIPE-OV","status":"ASSEMBLED","owner":"Org1MSP","submittingOrgMspId":"Org1MSP","coAttestingOrgs":["Org1MSP","Org2MSP"],"timestamp":"2026-08-27T18:29:11.494223Z","reason":"defect in batch X","reasonHistory":["REVOKED by Org3MSP: root cause resolved [tx:bc29968c8aad6988e9bfade7d646c512856f8be7dae4e38dac1db897fa347144] (lifecycle status ASSEMBLED untouched)"],"components":["COMP-OV1","COMP-OV2"]}

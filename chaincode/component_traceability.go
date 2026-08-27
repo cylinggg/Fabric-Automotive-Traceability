@@ -65,6 +65,7 @@ type ComponentToken struct {
 	RecipeID         string    `json:"recipeId,omitempty"`
 	Status           string    `json:"status"` // lifecycle only: MANUFACTURED, QC_PASSED, SHIPPED, ASSEMBLED, DELIVERED (never RECALLED; see RecallStatus)
 	RecallStatus     string    `json:"recallStatus,omitempty"` // "" (never recalled), RECALLED, or a CloseRecall resolution (REPAIRED, REPLACED, RETIRED); independent of Status
+	RecallBatchID    string    `json:"recallBatchId,omitempty"` // which batch's TriggerRecall call set the current RecallStatus; see the cross-batch overlap note on TriggerRecall
 	Owner            string    `json:"owner"`
 	DataHash         string    `json:"dataHash,omitempty"` // SHA-256 hex digest, computed client-side and submitted as a digest only (see RegisterComponent)
 	SubmittingOrgMSP string    `json:"submittingOrgMspId"` // cryptographically verified by Fabric for this transaction
@@ -519,6 +520,16 @@ func (s *SmartContract) ProvenanceCheck(ctx contractapi.TransactionContextInterf
 // batch~component does not have this gap, because the composite keys
 // themselves are ordinary ledger keys subject to normal MVCC read-set
 // tracking.
+//
+// Cross-batch overlap: a product can be indexed under more than one batch
+// (Section 3.3 / RecordAssembly). If that product is already RECALLED under
+// a different batch's still-open campaign, this call does not overwrite
+// that campaign's RecallBatchID (which would let a later RevokeRecall for
+// batchID incorrectly clear a recall it never actually caused, described in
+// the ComponentToken doc comment). Such tokens are left untouched and
+// listed separately in the response as skippedOverlap, rather than silently
+// merged into this batch's campaign or silently left out of the response
+// entirely.
 func (s *SmartContract) TriggerRecall(ctx contractapi.TransactionContextInterface, batchID string, reason string) (string, error) {
 	callerMSP, err := ctx.GetClientIdentity().GetMSPID()
 	if err != nil {
@@ -538,6 +549,7 @@ func (s *SmartContract) TriggerRecall(ctx contractapi.TransactionContextInterfac
 
 	affected := 0
 	recalledIDs := make([]string, 0, len(componentIDs))
+	skippedOverlap := make([]string, 0)
 	ownerSet := map[string]bool{}
 	for _, tokenID := range componentIDs {
 		token, err := s.mustGetToken(ctx, tokenID)
@@ -545,9 +557,17 @@ func (s *SmartContract) TriggerRecall(ctx contractapi.TransactionContextInterfac
 			return "", err
 		}
 		if token.RecallStatus == "RECALLED" {
+			if token.RecallBatchID != batchID {
+				// Already under a different batch's open campaign: leave it
+				// alone rather than relabelling it as this batch's, which
+				// would make a later RevokeRecall(batchID) incorrectly
+				// clear a recall this call never actually caused.
+				skippedOverlap = append(skippedOverlap, tokenID)
+			}
 			continue
 		}
 		token.RecallStatus = "RECALLED"
+		token.RecallBatchID = batchID
 		token.Reason = reason
 		if err := s.putToken(ctx, token, ""); err != nil {
 			return "", err
@@ -563,6 +583,7 @@ func (s *SmartContract) TriggerRecall(ctx contractapi.TransactionContextInterfac
 	}
 	sort.Strings(owners)
 	sort.Strings(recalledIDs)
+	sort.Strings(skippedOverlap)
 
 	txID := ctx.GetStub().GetTxID()
 	// Exactly one SetEvent call for the whole transaction: Fabric only
@@ -576,6 +597,7 @@ func (s *SmartContract) TriggerRecall(ctx contractapi.TransactionContextInterfac
 		"batchId":        batchID,
 		"affectedCount":  affected,
 		"recalledTokens": recalledIDs,
+		"skippedOverlap": skippedOverlap,
 		"notifiedOwners": owners,
 		"txId":           txID,
 	})
@@ -584,10 +606,11 @@ func (s *SmartContract) TriggerRecall(ctx contractapi.TransactionContextInterfac
 	}
 
 	out, _ := json.Marshal(map[string]interface{}{
-		"batchId":         batchID,
-		"affectedCount":   affected,
-		"notifiedOwners":  owners,
-		"txId":            txID,
+		"batchId":        batchID,
+		"affectedCount":  affected,
+		"skippedOverlap": skippedOverlap,
+		"notifiedOwners": owners,
+		"txId":           txID,
 	})
 	return string(out), nil
 }
@@ -653,7 +676,10 @@ func (s *SmartContract) ReviseRecallReason(ctx contractapi.TransactionContextInt
 		if err != nil {
 			return "", err
 		}
-		if token.RecallStatus != "RECALLED" {
+		if token.RecallStatus != "RECALLED" || token.RecallBatchID != batchID {
+			// Not currently recalled, or recalled under a different batch's
+			// campaign: this batch's amendment must not touch it (see the
+			// cross-batch overlap note on TriggerRecall).
 			continue
 		}
 		token.ReasonHistory = append(token.ReasonHistory, fmt.Sprintf("AMENDED by %s: %s [tx:%s]", callerMSP, amendedReason, txID))
@@ -669,17 +695,30 @@ func (s *SmartContract) ReviseRecallReason(ctx contractapi.TransactionContextInt
 	return string(out), nil
 }
 
-// RevokeRecall clears RecallStatus on every RECALLED token in a batch,
-// restoring visibility of whatever lifecycle status (Status) the token
-// actually had, since that field was never touched by TriggerRecall in the
-// first place. An earlier version of this chaincode instead overwrote
-// Status with a generic ACTIVE value on revocation, silently destroying the
-// information that the token had, for example, already been DELIVERED
-// before the recall; this version cannot lose that information because
-// recall and lifecycle are tracked in separate fields. This function is
-// deliberately restricted to RegulatorMSP only (not the OEM), so the OEM
-// cannot unilaterally cancel its own recall. The fact that a recall happened
-// and was later revoked stays visible via ReasonHistory and GetHistory().
+// RevokeRecall clears RecallStatus on every token whose RecallBatchID
+// matches batchID, restoring visibility of whatever lifecycle status
+// (Status) the token actually had, since that field was never touched by
+// TriggerRecall in the first place. An earlier version of this chaincode
+// instead overwrote Status with a generic ACTIVE value on revocation,
+// silently destroying the information that the token had, for example,
+// already been DELIVERED before the recall; this version cannot lose that
+// information because recall and lifecycle are tracked in separate fields.
+//
+// The RecallBatchID check matters independently of that fix: a product can
+// be indexed under more than one batch (Section 3.3). Before RecallBatchID
+// existed, RevokeRecall(batchID) cleared RecallStatus on every RECALLED
+// token reachable from batchID's index entries, including a product that
+// was actually still under a different, unrelated batch's open recall
+// campaign, silently clearing a recall this call had no authority over.
+// Restricting the clear to tokens whose RecallBatchID equals batchID fixes
+// that: a token recalled under a different batch is left untouched, exactly
+// as TriggerRecall itself already declines to relabel it (see its own doc
+// comment).
+//
+// This function is deliberately restricted to RegulatorMSP only (not the
+// OEM), so the OEM cannot unilaterally cancel its own recall. The fact that
+// a recall happened and was later revoked stays visible via ReasonHistory
+// and GetHistory().
 func (s *SmartContract) RevokeRecall(ctx contractapi.TransactionContextInterface, batchID string, justification string) (string, error) {
 	callerMSP, err := ctx.GetClientIdentity().GetMSPID()
 	if err != nil {
@@ -700,10 +739,15 @@ func (s *SmartContract) RevokeRecall(ctx contractapi.TransactionContextInterface
 		if err != nil {
 			return "", err
 		}
-		if token.RecallStatus != "RECALLED" {
+		if token.RecallStatus != "RECALLED" || token.RecallBatchID != batchID {
+			// Not currently recalled, or recalled under a different batch's
+			// still-open campaign: revoking batchID must not clear a recall
+			// this call has no authority over (see the type doc comment for
+			// RecallBatchID and TriggerRecall's cross-batch overlap note).
 			continue
 		}
 		token.RecallStatus = ""
+		token.RecallBatchID = ""
 		token.ReasonHistory = append(token.ReasonHistory, fmt.Sprintf("REVOKED by %s: %s [tx:%s] (lifecycle status %s untouched)", callerMSP, justification, txID, token.Status))
 		if err := s.putToken(ctx, token, ""); err != nil {
 			return "", err
