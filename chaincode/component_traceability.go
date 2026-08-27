@@ -29,7 +29,7 @@ import (
 //	    product assembly (RecordAssembly no longer requires shared batch
 //	    membership), RecallStatus separated from lifecycle Status, and
 //	    CounterfeitScan renamed to ProvenanceCheck.
-//	2.1 (sequence 3, current): RecallBatchID added to fix a cross-batch
+//	2.1 (sequence 3, evaluated deployment): RecallBatchID added to fix a cross-batch
 //	    overlap gap the 2.0 design could not represent: a product recalled
 //	    under two different batches at once had no record of which
 //	    batch's campaign actually owned the current recall, so revoking
@@ -38,6 +38,10 @@ import (
 //	    under a different batch (reported as skippedOverlap instead), and
 //	    ReviseRecallReason/RevokeRecall now act only on tokens whose
 //	    RecallBatchID matches the batch named in the call.
+//	Evidence-model extension (current source, unit-tested but not attributed
+//	    to the retained v2.1 live-network logs): append-only
+//	    EvidenceReference records plus AttachEvidence/GetEvidence, while
+//	    preserving the v2.1 transaction signatures and legacy DataHash field.
 type SmartContract struct {
 	contractapi.Contract
 }
@@ -80,24 +84,40 @@ type SmartContract struct {
 // that *some* authorised client wrote this record; it does not, by itself,
 // prove that the physical component being scanned in the real world is the
 // genuine article the record describes (see ProvenanceCheck's doc comment).
+// EvidenceReference anchors one externally stored document to a token.
+// Document bytes stay off-chain. ProducerMSP is declared metadata, whereas
+// SubmittedByMSP comes from the authenticated Fabric proposal signer.
+type EvidenceReference struct {
+	EvidenceID     string    `json:"evidenceId"`
+	DocumentType   string    `json:"documentType"`
+	SHA256         string    `json:"sha256"`
+	HashAlgorithm  string    `json:"hashAlgorithm"`
+	ProducerMSP    string    `json:"producerMsp"`
+	RepositoryRef  string    `json:"repositoryRef"`
+	SubmittedByMSP string    `json:"submittedByMsp"`
+	SubmittedAt    time.Time `json:"submittedAt"`
+	SchemaVersion  string    `json:"schemaVersion"`
+}
+
 type ComponentToken struct {
-	DocType          string    `json:"docType"` // "component" or "product"
-	TokenID          string    `json:"tokenId"`
-	BatchID          string    `json:"batchId"` // component: its one batch; product: its lowest-sorted constituent batch, see ComponentBatches
-	ComponentBatches []string  `json:"componentBatches,omitempty"` // product tokens only: every distinct batch among the assembled components (see RecordAssembly)
-	RecipeID         string    `json:"recipeId,omitempty"`
-	Status           string    `json:"status"` // lifecycle only: MANUFACTURED, QC_PASSED, SHIPPED, ASSEMBLED, DELIVERED (never RECALLED; see RecallStatus)
-	RecallStatus     string    `json:"recallStatus,omitempty"` // "" (never recalled), RECALLED, or a CloseRecall resolution (REPAIRED, REPLACED, RETIRED); independent of Status
-	RecallBatchID    string    `json:"recallBatchId,omitempty"` // which batch's TriggerRecall call set the current RecallStatus; see the cross-batch overlap note on TriggerRecall
-	Owner            string    `json:"owner"`
-	DataHash         string    `json:"dataHash,omitempty"` // SHA-256 hex digest, computed client-side and submitted as a digest only (see RegisterComponent)
-	SubmittingOrgMSP string    `json:"submittingOrgMspId"` // cryptographically verified by Fabric for this transaction
-	CoAttestingOrgs  []string  `json:"coAttestingOrgs"`    // self-declared, not independently verified (see type doc comment)
-	Timestamp        time.Time `json:"timestamp"`          // from ctx.GetStub().GetTxTimestamp(), not time.Now()
-	Reason           string    `json:"reason,omitempty"`   // original recall reason, never overwritten
-	ReasonHistory    []string  `json:"reasonHistory,omitempty"`
-	Components       []string  `json:"components,omitempty"` // for assembled product tokens
-	UsageAvgTempC    *float64  `json:"usageAvgTempC,omitempty"`
+	DocType          string              `json:"docType"` // "component" or "product"
+	TokenID          string              `json:"tokenId"`
+	BatchID          string              `json:"batchId"`                    // component: its one batch; product: its lowest-sorted constituent batch, see ComponentBatches
+	ComponentBatches []string            `json:"componentBatches,omitempty"` // product tokens only: every distinct batch among the assembled components (see RecordAssembly)
+	RecipeID         string              `json:"recipeId,omitempty"`
+	Status           string              `json:"status"`                  // lifecycle only: MANUFACTURED, QC_PASSED, SHIPPED, ASSEMBLED, DELIVERED (never RECALLED; see RecallStatus)
+	RecallStatus     string              `json:"recallStatus,omitempty"`  // "" (never recalled), RECALLED, or a CloseRecall resolution (REPAIRED, REPLACED, RETIRED); independent of Status
+	RecallBatchID    string              `json:"recallBatchId,omitempty"` // which batch's TriggerRecall call set the current RecallStatus; see the cross-batch overlap note on TriggerRecall
+	Owner            string              `json:"owner"`
+	DataHash         string              `json:"dataHash,omitempty"` // legacy latest digest retained for v2.1 compatibility
+	Evidence         []EvidenceReference `json:"evidence,omitempty"` // typed references to separately stored off-chain documents
+	SubmittingOrgMSP string              `json:"submittingOrgMspId"` // cryptographically verified by Fabric for this transaction
+	CoAttestingOrgs  []string            `json:"coAttestingOrgs"`    // self-declared, not independently verified (see type doc comment)
+	Timestamp        time.Time           `json:"timestamp"`          // from ctx.GetStub().GetTxTimestamp(), not time.Now()
+	Reason           string              `json:"reason,omitempty"`   // original recall reason, never overwritten
+	ReasonHistory    []string            `json:"reasonHistory,omitempty"`
+	Components       []string            `json:"components,omitempty"` // for assembled product tokens
+	UsageAvgTempC    *float64            `json:"usageAvgTempC,omitempty"`
 }
 
 const (
@@ -234,6 +254,58 @@ func (s *SmartContract) RecordTest(ctx contractapi.TransactionContextInterface, 
 	token.CoAttestingOrgs = coAttestors
 	token.Status = "QC_PASSED"
 	return s.putToken(ctx, token, "TestRecorded")
+}
+
+// AttachEvidence appends verification metadata for an externally stored
+// document. The document itself never enters the Fabric proposal.
+func (s *SmartContract) AttachEvidence(ctx contractapi.TransactionContextInterface,
+	tokenID string, evidenceID string, documentType string, documentSHA256 string,
+	producerMSP string, repositoryRef string, coAttestingOrgsCSV string) error {
+	if tokenID == "" || evidenceID == "" || documentType == "" || producerMSP == "" || repositoryRef == "" {
+		return fmt.Errorf("attachEvidence rejected: tokenID, evidenceID, documentType, producerMSP, and repositoryRef are required")
+	}
+	if err := requireHashLike(documentSHA256); err != nil {
+		return fmt.Errorf("attachEvidence rejected: %v", err)
+	}
+	token, err := s.mustGetToken(ctx, tokenID)
+	if err != nil {
+		return err
+	}
+	for _, evidence := range token.Evidence {
+		if evidence.EvidenceID == evidenceID {
+			return fmt.Errorf("attachEvidence rejected: evidence %s already exists on token %s", evidenceID, tokenID)
+		}
+	}
+	callerMSP, coAttestors, err := recordCoAttestation(ctx, splitCSV(coAttestingOrgsCSV))
+	if err != nil {
+		return err
+	}
+	if len(coAttestors) < minCoAttestingOrgs {
+		return fmt.Errorf("attachEvidence rejected: needs >=%d co-attesting orgs", minCoAttestingOrgs)
+	}
+	ts, err := txTimestamp(ctx)
+	if err != nil {
+		return err
+	}
+	token.Evidence = append(token.Evidence, EvidenceReference{
+		EvidenceID: evidenceID, DocumentType: documentType,
+		SHA256: documentSHA256, HashAlgorithm: "SHA-256",
+		ProducerMSP: producerMSP, RepositoryRef: repositoryRef,
+		SubmittedByMSP: callerMSP, SubmittedAt: ts, SchemaVersion: "1.0",
+	})
+	token.SubmittingOrgMSP = callerMSP
+	token.CoAttestingOrgs = coAttestors
+	return s.putToken(ctx, token, "EvidenceAttached")
+}
+
+// GetEvidence returns ledger metadata and digests only. Authorised clients
+// retrieve the corresponding document from the external repository.
+func (s *SmartContract) GetEvidence(ctx contractapi.TransactionContextInterface, tokenID string) ([]EvidenceReference, error) {
+	token, err := s.mustGetToken(ctx, tokenID)
+	if err != nil {
+		return nil, err
+	}
+	return token.Evidence, nil
 }
 
 // RecordShipment transfers custody to the next organisation in the chain.

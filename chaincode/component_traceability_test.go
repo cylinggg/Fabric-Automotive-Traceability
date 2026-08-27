@@ -155,7 +155,9 @@ type fakeCtx struct {
 }
 
 func (c *fakeCtx) GetStub() shim.ChaincodeStubInterface { return c.stub }
-func (c *fakeCtx) GetClientIdentity() cid.ClientIdentity { return &fakeClientIdentity{mspID: c.callerID} }
+func (c *fakeCtx) GetClientIdentity() cid.ClientIdentity {
+	return &fakeClientIdentity{mspID: c.callerID}
+}
 
 type fakeClientIdentity struct {
 	cid.ClientIdentity
@@ -190,8 +192,8 @@ func TestHashHexIsRealSHA256(t *testing.T) {
 
 func TestSplitCSV(t *testing.T) {
 	cases := map[string][]string{
-		"":              nil,
-		"Org2MSP":       {"Org2MSP"},
+		"":                nil,
+		"Org2MSP":         {"Org2MSP"},
 		"Org2MSP,Org3MSP": {"Org2MSP", "Org3MSP"},
 	}
 	for in, want := range cases {
@@ -281,6 +283,46 @@ func TestRecordTest_RejectsWrongPriorStatus(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "invalid state transition") {
 		t.Fatalf("expected an 'invalid state transition' error, got: %v", err)
+	}
+}
+
+func TestAttachEvidence_PreservesMultipleReferences(t *testing.T) {
+	s := &SmartContract{}
+	stub := newFakeStub("tx-evidence")
+	ctx := &fakeCtx{stub: stub, callerID: oemOrgMSP}
+	if err := s.RegisterComponent(ctx, "COMP-E1", "BATCH-E", "Tier2Supplier", reportHash("registration"), "Org2MSP"); err != nil {
+		t.Fatalf("setup failed: %v", err)
+	}
+	if err := s.AttachEvidence(ctx, "COMP-E1", "EVID-QC-001", "QUALITY_TEST_REPORT", reportHash("qc bytes"), "Org2MSP", "quality-repository:QC-001", "Org2MSP"); err != nil {
+		t.Fatalf("AttachEvidence(QC) failed: %v", err)
+	}
+	if err := s.AttachEvidence(ctx, "COMP-E1", "EVID-SHIP-001", "SHIPPING_MANIFEST", reportHash("shipping bytes"), "Org2MSP", "logistics-repository:SHIP-001", "Org2MSP"); err != nil {
+		t.Fatalf("AttachEvidence(shipping) failed: %v", err)
+	}
+	evidence, err := s.GetEvidence(ctx, "COMP-E1")
+	if err != nil || len(evidence) != 2 {
+		t.Fatalf("GetEvidence = (%+v, %v), want two records", evidence, err)
+	}
+	if evidence[0].HashAlgorithm != "SHA-256" || evidence[0].SubmittedByMSP != oemOrgMSP || evidence[0].ProducerMSP != "Org2MSP" {
+		t.Fatalf("evidence metadata incorrect: %+v", evidence[0])
+	}
+}
+
+func TestAttachEvidence_RejectsDuplicateIDAndInvalidDigest(t *testing.T) {
+	s := &SmartContract{}
+	stub := newFakeStub("tx-evidence-negative")
+	ctx := &fakeCtx{stub: stub, callerID: oemOrgMSP}
+	if err := s.RegisterComponent(ctx, "COMP-E2", "BATCH-E", "Tier2Supplier", reportHash("registration"), "Org2MSP"); err != nil {
+		t.Fatalf("setup failed: %v", err)
+	}
+	if err := s.AttachEvidence(ctx, "COMP-E2", "EVID-001", "QUALITY_TEST_REPORT", reportHash("v1"), "Org2MSP", "quality-repository:001", "Org2MSP"); err != nil {
+		t.Fatalf("first AttachEvidence failed: %v", err)
+	}
+	if err := s.AttachEvidence(ctx, "COMP-E2", "EVID-001", "QUALITY_TEST_REPORT", reportHash("v2"), "Org2MSP", "quality-repository:002", "Org2MSP"); err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("duplicate evidence ID should fail, got: %v", err)
+	}
+	if err := s.AttachEvidence(ctx, "COMP-E2", "EVID-002", "QUALITY_TEST_REPORT", "not-a-digest", "Org2MSP", "quality-repository:002", "Org2MSP"); err == nil || !strings.Contains(err.Error(), "SHA-256") {
+		t.Fatalf("invalid digest should fail, got: %v", err)
 	}
 }
 

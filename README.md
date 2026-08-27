@@ -13,12 +13,13 @@ production system. Organisation names are generic (`OEM`, `Tier1Supplier`,
 `Tier2Supplier`, `Regulator`, `Dealer`) rather than tied to any named
 manufacturer.
 
-The version described throughout the dissertation is chaincode
-`component-traceability` version 2.1, sequence 3, tagged `v2.1-submission`
-in this repository; `v2.0-submission` is an earlier, superseded tag kept
-for history. See `chaincode/component_traceability.go`'s top-of-file
-comments and the evidence log filenames below for which fixes shipped in
-which version.
+The retained live-network evidence evaluates chaincode
+`component-traceability` version 2.1, sequence 3, tagged `v2.1-submission`.
+The current source adds the backwards-compatible, unit-tested
+`EvidenceReference`/`AttachEvidence` extension; it is not retroactively
+claimed as part of those v2.1 deployment logs. `v2.0-submission` is an
+earlier, superseded tag kept for history. See the chaincode's top-of-file
+comments and the evidence log filenames below for the evidence boundary.
 
 ## What is actually in this repo
 
@@ -30,6 +31,19 @@ which version.
     report text itself, so the report cannot leak through a transaction
     proposal (an earlier version hashed the full report text inside the
     chaincode).
+  - Multi-document off-chain evidence: `AttachEvidence` appends an
+    `EvidenceReference` containing a unique evidence ID, document type,
+    SHA-256 digest, declared producer MSP, opaque repository reference,
+    authenticated submitting MSP, Fabric timestamp, and schema version.
+    `GetEvidence` returns these references without retrieving or exposing
+    the documents. The scalar `dataHash` remains for v2.1 compatibility;
+    it is not the recommended production evidence model.
+  - The external repository remains out of scope. This prototype does not
+    implement its access control, signatures, audit log, backup, retention,
+    or availability. `ProducerMSP` is declared metadata;
+    `SubmittedByMSP` is the identity Fabric authenticates. Matching
+    SHA-256 values prove byte-for-byte consistency, not truthfulness,
+    authorship, or physical-part authenticity.
   - Cross-batch product assembly: `RecordAssembly` no longer requires
     every component to share one batch. A product records every distinct
     batch its components were drawn from in `componentBatches` and is
@@ -121,6 +135,8 @@ which version.
 - `chaincode/component_traceability_test.go` — Go unit tests (`go test
   ./...`, no Docker or live network required) covering the business logic
   that does not need a real peer to verify: real-SHA-256 hashing,
+  retention of multiple typed evidence references, duplicate evidence-ID
+  and malformed-digest rejection,
   duplicate-ID rejection, insufficient-co-attestation rejection, invalid
   state-transition rejection, deterministic sorted co-attestation
   ordering, unauthorised-caller rejection, unknown-batch rejection,
@@ -226,6 +242,8 @@ cd fabric-samples/test-network
 |---|---|---|
 | `RegisterComponent` | ≥2 distinct orgs | Mint a new component token; rejects duplicate IDs; takes a client-computed SHA-256 hash of the report, not the report text |
 | `RecordTest` | ≥2 distinct orgs; requires status `MANUFACTURED`; rejects if currently RECALLED | Commit client-hashed QC test-report digest; status → `QC_PASSED` |
+| `AttachEvidence` | ≥2 distinct orgs; evidence ID must be unique within the token | Append typed metadata and a client-computed SHA-256 digest for an externally stored document; document bytes never enter Fabric |
+| `GetEvidence` | Read-only | Return evidence references and verification metadata; actual document retrieval remains off-chain |
 | `RecordShipment` | ≥2 distinct orgs; requires status `QC_PASSED`, matching current owner, and not currently RECALLED | Transfer custody; status → `SHIPPED` |
 | `RecordAssembly` | ≥2 distinct orgs; every listed component must be `SHIPPED` and not currently RECALLED (components may span multiple batches) | Combine components into a product token, recording every distinct constituent batch in `componentBatches`; status → `ASSEMBLED` |
 | `RecordDelivery` | ≥2 distinct orgs; requires status `ASSEMBLED` and not currently RECALLED; cascades to every component | Final transfer to dealer; status → `DELIVERED` |
@@ -242,6 +260,27 @@ Every write function above that operates on an existing token also rejects
 the call outright if that token's `recallStatus` is currently `RECALLED`
 (`requireNotRecalled`), so a component under recall cannot continue moving
 through its ordinary lifecycle while the recall is open.
+
+## Off-chain evidence verification
+
+Hash the exact file bytes before calling `AttachEvidence`:
+
+```bash
+./scripts/verify_offchain_evidence.sh path/to/report.pdf
+```
+
+Later, compare a retrieved file with the SHA-256 value returned by
+`GetEvidence`:
+
+```bash
+./scripts/verify_offchain_evidence.sh path/to/retrieved-report.pdf \
+  0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+```
+
+Renaming a byte-identical file does not change its digest; changing even one
+byte normally does. Visually identical Office documents may hash differently
+when embedded metadata differs. This is integrity verification, not
+encryption or plagiarism/similarity detection.
 
 ## Licence
 
