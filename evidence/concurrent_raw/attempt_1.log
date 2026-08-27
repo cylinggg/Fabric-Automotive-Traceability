@@ -1,0 +1,4 @@
+attempt=1 duration=2.273s
+[34m2026-08-27 23:58:42.550 BST 0001 INFO[0m [chaincodeCmd] [34;1mClientWait[0m -> txid [a5901bf1591a77c234cce00e526effadf223cfa364cf11fee61e02f0a51e7fd2] committed with status (VALID) at localhost:7051
+[34m2026-08-27 23:58:42.553 BST 0002 INFO[0m [chaincodeCmd] [34;1mClientWait[0m -> txid [a5901bf1591a77c234cce00e526effadf223cfa364cf11fee61e02f0a51e7fd2] committed with status (VALID) at localhost:9051
+[34m2026-08-27 23:58:42.553 BST 0003 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 

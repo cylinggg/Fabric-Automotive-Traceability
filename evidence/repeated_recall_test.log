@@ -1,0 +1,4 @@
+=== Repeated-recall (idempotency) test: calling TriggerRecall a second time on already-recalled BENCH-10, 2026-08-27T22:59:03Z ===
+[34m2026-08-27 23:59:05.931 BST 0001 INFO[0m [chaincodeCmd] [34;1mClientWait[0m -> txid [5ec3df39434e2635767d216e9392ea53e1b82e39496b645e884cf8299e3b094b] committed with status (VALID) at localhost:7051
+[34m2026-08-27 23:59:05.931 BST 0002 INFO[0m [chaincodeCmd] [34;1mClientWait[0m -> txid [5ec3df39434e2635767d216e9392ea53e1b82e39496b645e884cf8299e3b094b] committed with status (VALID) at localhost:9051
+[34m2026-08-27 23:59:05.932 BST 0003 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 payload:"{\"affectedCount\":0,\"batchId\":\"BENCH-10\",\"notifiedOwners\":[],\"skippedOverlap\":[],\"txId\":\"5ec3df39434e2635767d216e9392ea53e1b82e39496b645e884cf8299e3b094b\"}" 

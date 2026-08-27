@@ -1,0 +1,4 @@
+attempt=3 duration=2.245s
+[34m2026-08-27 23:58:42.550 BST 0001 INFO[0m [chaincodeCmd] [34;1mClientWait[0m -> txid [e9bf6321da68578847bc198c9290b7b2625a24577c7bc243ce37565f8c9f2920] committed with status (MVCC_READ_CONFLICT) at localhost:7051
+[34m2026-08-27 23:58:42.553 BST 0002 INFO[0m [chaincodeCmd] [34;1mClientWait[0m -> txid [e9bf6321da68578847bc198c9290b7b2625a24577c7bc243ce37565f8c9f2920] committed with status (MVCC_READ_CONFLICT) at localhost:9051
+Error: transaction invalidated with status (MVCC_READ_CONFLICT) - proposal response: <nil>

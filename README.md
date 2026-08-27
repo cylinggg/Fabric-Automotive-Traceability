@@ -70,7 +70,7 @@ which version.
   fix on delivery, batch recall, `CloseRecall`, and `ReviseRecallReason`.
   All transactions in this script are real, endorsed, committed Fabric
   transactions (see `evidence/real_fabric_run2_full_scenario.log`).
-- `evidence/` — unedited console output of eight separate runs, captured
+- `evidence/` — unedited console output of ten separate runs, captured
   directly from `peer chaincode invoke`/`query` against a running network,
   not from any simulator:
   - `real_fabric_run1_timing_lesson.log` and
@@ -106,7 +106,18 @@ which version.
     measured duration is genuine submit-to-commit latency; zero failures
     across 1,110 registrations and three `TriggerRecall` calls; see the
     dissertation's Scalability and Performance section for the reported
-    figures and their limits).
+    figures and their limits);
+  - `concurrent_conflict_summary.txt` and `concurrent_raw/` (v2.1,
+    produced by `scripts/benchmark_concurrent_conflict.sh`: 8 concurrent
+    `RecordTest` invocations against the same component ID from
+    independent client processes launched simultaneously; exactly 1
+    committed and 7 were rejected with a real `MVCC_READ_CONFLICT`
+    status, with the final ledger query confirming a single consistent
+    post-test state);
+  - `repeated_recall_test.log` (v2.1, a second `TriggerRecall` call on an
+    already-fully-recalled batch: commits successfully with
+    `affectedCount:0` rather than erroring or re-affecting already-
+    recalled tokens).
 - `chaincode/component_traceability_test.go` — Go unit tests (`go test
   ./...`, no Docker or live network required) covering the business logic
   that does not need a real peer to verify: real-SHA-256 hashing,

@@ -1,0 +1,13 @@
+=== Concurrent conflict test: componentID=CONCURRENT-TEST-1, K=8 concurrent RecordTest calls, 2026-08-27T22:58:40Z ===
+attempt 1: SUCCESS
+attempt 2: FAILED - [34m2026-08-27 23:58:42.551 BST 0001 INFO[0m [chaincodeCmd] [34;1mClientWait[0m -> txid [1d9430748befa0621ba6618da8ee07b44c834ae766ceee9051c7c1665866146d] committed with status (MVCC_READ_CONFLICT) at localhost:7051
+attempt 3: FAILED - [34m2026-08-27 23:58:42.550 BST 0001 INFO[0m [chaincodeCmd] [34;1mClientWait[0m -> txid [e9bf6321da68578847bc198c9290b7b2625a24577c7bc243ce37565f8c9f2920] committed with status (MVCC_READ_CONFLICT) at localhost:7051
+attempt 4: FAILED - [34m2026-08-27 23:58:42.550 BST 0001 INFO[0m [chaincodeCmd] [34;1mClientWait[0m -> txid [831f6ec44ce990a09d239943bb1adde3d1e0fb0c27ee35591f58e2a3ec121b14] committed with status (MVCC_READ_CONFLICT) at localhost:7051
+attempt 5: FAILED - [34m2026-08-27 23:58:42.549 BST 0001 INFO[0m [chaincodeCmd] [34;1mClientWait[0m -> txid [3b47bf1d7503609fc0390da4ade49aa9a77dd907d9c57d46ef84f5c1f5e08332] committed with status (MVCC_READ_CONFLICT) at localhost:7051
+attempt 6: FAILED - [34m2026-08-27 23:58:42.550 BST 0001 INFO[0m [chaincodeCmd] [34;1mClientWait[0m -> txid [e934b2be17f1bf81f24685a803f2db5c303f20019a6810b20ea45a41fd73f5d5] committed with status (MVCC_READ_CONFLICT) at localhost:7051
+attempt 7: FAILED - [34m2026-08-27 23:58:42.551 BST 0001 INFO[0m [chaincodeCmd] [34;1mClientWait[0m -> txid [81afd91ba698b0c666dfcadd19b9adaba62ac13ae513598676065651188b8a3d] committed with status (MVCC_READ_CONFLICT) at localhost:7051
+attempt 8: FAILED - [34m2026-08-27 23:58:42.550 BST 0001 INFO[0m [chaincodeCmd] [34;1mClientWait[0m -> txid [3cc2d8a448efd32567aa34af4f94aef13bd3809c7b0072ba0159bc6983d77ae2] committed with status (MVCC_READ_CONFLICT) at localhost:7051
+
+Result: 1 succeeded, 7 failed, out of 8 concurrent attempts on the same key (CONCURRENT-TEST-1).
+Final ledger state:
+{"docType":"component","tokenId":"CONCURRENT-TEST-1","batchId":"BATCH-CONCURRENT","status":"QC_PASSED","owner":"Tier2Supplier","dataHash":"77356e3432dc4ab47f2ee7cb6aed5f8b595a69ede75386dd7a32eddb77851c6e","submittingOrgMspId":"Org1MSP","coAttestingOrgs":["Org1MSP","Org2MSP"],"timestamp":"2026-08-27T22:58:06.61724Z"}
