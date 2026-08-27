@@ -13,6 +13,13 @@ production system. Organisation names are generic (`OEM`, `Tier1Supplier`,
 `Tier2Supplier`, `Regulator`, `Dealer`) rather than tied to any named
 manufacturer.
 
+The version described throughout the dissertation is chaincode
+`component-traceability` version 2.1, sequence 3, tagged `v2.1-submission`
+in this repository; `v2.0-submission` is an earlier, superseded tag kept
+for history. See `chaincode/component_traceability.go`'s top-of-file
+comments and the evidence log filenames below for which fixes shipped in
+which version.
+
 ## What is actually in this repo
 
 - `chaincode/component_traceability.go` — the full Go chaincode (Fabric
@@ -63,19 +70,33 @@ manufacturer.
   fix on delivery, batch recall, `CloseRecall`, and `ReviseRecallReason`.
   All transactions in this script are real, endorsed, committed Fabric
   transactions (see `evidence/real_fabric_run2_full_scenario.log`).
-- `evidence/` — unedited console output of four separate runs, captured
-  directly from `peer chaincode invoke`/`query` against a running
-  network, not from any simulator: `real_fabric_run1_timing_lesson.log`
-  and `real_fabric_run2_full_scenario.log` (the two-organisation
-  lifecycle/recall runs above), `real_fabric_rename_verification.log` (a
-  `RegisterComponent`/`GetComponent` pair confirming the chaincode still
-  works after being repackaged and redeployed under this generic name),
-  and `real_fabric_org3_regulator_scenario.log` (a third organisation,
-  `Org3MSP`, added to the same network via `fabric-samples`' `addOrg3`,
-  then a real regulator-triggered `TriggerRecall` and a real
-  `RevokeRecall` invoked by `Org3MSP`, alongside the corresponding
-  rejections when `Org2MSP`/`Org1MSP` attempt those same calls without
-  authority).
+- `evidence/` — unedited console output of seven separate runs, captured
+  directly from `peer chaincode invoke`/`query` against a running network,
+  not from any simulator:
+  - `real_fabric_run1_timing_lesson.log` and
+    `real_fabric_run2_full_scenario.log` (v1.0, the two-organisation
+    lifecycle/recall runs above, including the commit-timing lesson);
+  - `real_fabric_rename_verification.log` (v1.0, a
+    `RegisterComponent`/`GetComponent` pair confirming the chaincode still
+    works after being repackaged and redeployed under this generic name);
+  - `real_fabric_org3_regulator_scenario.log` (v1.0, a third organisation,
+    `Org3MSP`, added via `fabric-samples`' `addOrg3`, then a real
+    regulator-triggered `TriggerRecall` and `RevokeRecall`, alongside the
+    corresponding rejections when `Org2MSP`/`Org1MSP` attempt those same
+    calls without authority);
+  - `real_fabric_run3_hardening_v2.log` (v2.0, cross-batch product
+    assembly, recall via a non-primary constituent batch, recall status
+    preserved separately from lifecycle status through close and revoke,
+    and the `ProvenanceCheck` rename);
+  - `real_fabric_gapfill_scenario3.log` (v2.1, a genuine
+    `RegisterComponent` duplicate-ID rejection and a genuine
+    `WarrantyCheck` result, replacing two illustrative values in an
+    earlier dissertation draft that did not correspond to any logged run
+    in this repository);
+  - `real_fabric_run4_overlap_fix.log` (v2.1, the `RecallBatchID` fix: a
+    product recalled under two different batches at once, proving that
+    revoking the wrong batch leaves the real recall untouched while
+    revoking the right one clears it).
 - `chaincode/component_traceability_test.go` — Go unit tests (`go test
   ./...`, no Docker or live network required) covering the business logic
   that does not need a real peer to verify: real-SHA-256 hashing,
@@ -112,7 +133,18 @@ manufacturer.
   dissertation's Methodology chapter as historical/development-phase
   evidence (open the file directly in a browser; no build step or server
   required). Its results are superseded wherever both exist by the real
-  Fabric evidence in `evidence/`.
+  Fabric evidence in `evidence/`. Kept aligned with the Go chaincode's
+  hardening fixes rather than left stale: `status` (lifecycle) and
+  `recall_status` are separate fields, so `revokeRecall` clears
+  `recall_status` without resetting `status` to a generic placeholder (an
+  earlier version of this simulator did exactly that, the same bug fixed
+  in the chaincode), a `requireNotRecalled` guard blocks further lifecycle
+  calls on a recalled token, and `counterfeitScan`/`'AUTHENTIC'` were
+  renamed to `provenanceCheck`/`'REGISTERED_WITH_SUFFICIENT_ATTESTATION'`
+  for the same reason as the chaincode rename. It does not implement the
+  cross-batch `RecallBatchID` fix (Section 3.5 of the dissertation), since
+  this simulator has no product/assembly token type for a component to
+  belong to more than one batch in the first place.
 - `simulator/simulator-demo-screenshot.pdf` — a screenshot of the
   simulator running in-browser: 12 `registerComponent` calls succeeding
   and one `triggerRecall` attempt from `Tier1SupplierMSP` being correctly
@@ -179,10 +211,10 @@ cd fabric-samples/test-network
 | `RecordUsageLog` | ≥2 distinct orgs; rejects if currently RECALLED | Attach field telemetry to a token |
 | `WarrantyCheck` | Read-only | Apply a threshold rule to usage data |
 | `ProvenanceCheck` (formerly `CounterfeitScan`) | Read-only | Verify ledger registration + declared co-attestation count (not physical authenticity) |
-| `TriggerRecall` | Caller must be OEM or Regulator org | Batch-level recall via composite-key index; sets `recallStatus` (never touches lifecycle `status`); single aggregated event; a product is found via *any* of its constituent batches |
+| `TriggerRecall` | Caller must be OEM or Regulator org | Batch-level recall via composite-key index; sets `recallStatus` and `recallBatchId` (never touches lifecycle `status`); single aggregated event; a product is found via *any* of its constituent batches; a token already recalled under a *different* batch is reported as `skippedOverlap`, not relabelled |
 | `CloseRecall` | ≥2 distinct orgs; requires `recallStatus` = `RECALLED` | Resolve a recalled token's `recallStatus` to `REPAIRED`/`REPLACED`/`RETIRED`; lifecycle `status` is left untouched |
-| `ReviseRecallReason` | Caller must be OEM or Regulator org | Append an amendment to a batch's recall reason without overwriting it |
-| `RevokeRecall` | Caller must be Regulator org only | Clear a batch's `recallStatus` back to empty, restoring visibility of whatever lifecycle `status` the token actually had (not a generic placeholder) |
+| `ReviseRecallReason` | Caller must be OEM or Regulator org | Append an amendment to a batch's recall reason, restricted to tokens whose `recallBatchId` matches that batch, without overwriting it |
+| `RevokeRecall` | Caller must be Regulator org only | Clear `recallStatus`/`recallBatchId` back to empty for tokens whose `recallBatchId` matches the named batch only, restoring visibility of whatever lifecycle `status` the token actually had; a token still recalled under a *different* batch is left untouched (v2.1 fix — v2.0 could incorrectly clear it) |
 | `GetHistory` | Read-only | Full on-chain version history of a token (`GetHistoryForKey`) |
 
 Every write function above that operates on an existing token also rejects

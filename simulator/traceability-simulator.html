@@ -150,7 +150,7 @@
         <div class="glabel">02 · Scenario</div>
         <button class="act danger" id="btnRecall">Trigger recall<br><span class="k">triggerRecall() · OEM/Regulator only</span></button>
         <button class="act" id="btnWarranty">Check warranty<br><span class="k">warrantyCheck() · >85°C = user fault</span></button>
-        <button class="act" id="btnCounterfeit">Scan for counterfeit<br><span class="k">counterfeitScan()</span></button>
+        <button class="act" id="btnCounterfeit">Provenance check<br><span class="k">provenanceCheck() · not a genuineness proof</span></button>
       </div>
 
       <div class="action-group">
@@ -230,10 +230,21 @@ function commit(type, data, endorsers){
 }
 function emit(name, payload){ events.push({name, payload}); }
 
+// requireNotRecalled mirrors the Go chaincode's guard of the same name
+// (Section 4.2 of the dissertation): once recall_status and lifecycle
+// status are separate fields, nothing else stops a recalled token
+// continuing through the ordinary lifecycle unless this is checked
+// explicitly.
+function requireNotRecalled(token){
+  if (token.recall_status === 'RECALLED') throw new Error(`${token.token_id} is currently RECALLED (lifecycle status ${token.status})`);
+}
 function registerComponent(componentID, batchID, supplierID, endorsingOrgs){
   requireEndorsement(endorsingOrgs, {minOrgs:2});
   if (state.has(componentID)) throw new Error(`${componentID} already registered`);
-  const token = { token_id:componentID, batch_id:batchID, status:'MANUFACTURED', owner:supplierID,
+  // status is the lifecycle field only; recall_status starts unset and is
+  // never touched by lifecycle functions, matching the Go chaincode's
+  // ComponentToken.Status / RecallStatus separation.
+  const token = { token_id:componentID, batch_id:batchID, status:'MANUFACTURED', recall_status:undefined, owner:supplierID,
     org_signature: endorsingOrgs.join('+'), data_hash: hashStr(componentID+Date.now()).slice(0,12), history:[] };
   state.set(componentID, token);
   const block = commit('registerComponent', {componentID,batchID}, endorsingOrgs);
@@ -243,7 +254,8 @@ function registerComponent(componentID, batchID, supplierID, endorsingOrgs){
 }
 function recordShipment(componentID, toOrg, endorsingOrgs){
   requireEndorsement(endorsingOrgs, {minOrgs:2});
-  const token = mustGet(componentID); token.owner = toOrg; token.status = 'SHIPPED';
+  const token = mustGet(componentID); requireNotRecalled(token);
+  token.owner = toOrg; token.status = 'SHIPPED';
   const block = commit('recordShipment', {componentID,toOrg}, endorsingOrgs);
   token.history = token.history || [];
   token.history.push({event:'SHIPPED', block:block.index, txID:block.txID, to:toOrg});
@@ -252,7 +264,8 @@ function recordShipment(componentID, toOrg, endorsingOrgs){
 }
 function recordUsageLog(componentID, avgTempC, endorsingOrgs){
   requireEndorsement(endorsingOrgs, {minOrgs:2});
-  const token = mustGet(componentID); token.usage_log = { avg_temp_c: avgTempC };
+  const token = mustGet(componentID); requireNotRecalled(token);
+  token.usage_log = { avg_temp_c: avgTempC };
   const block = commit('recordUsageLog', {componentID,avgTempC}, endorsingOrgs);
   return {token, block};
 }
@@ -260,8 +273,10 @@ function triggerRecall(batchID, reason, callerOrg){
   requireEndorsement([callerOrg], {allowedOrgs:[ORGS.OEM, ORGS.REGULATOR]});
   const affected = [];
   for (const [key, doc] of state.entries()){
-    if (doc.batch_id === batchID && doc.status !== 'RECALLED'){
-      doc.status = 'RECALLED'; doc.reason = reason; affected.push(key);
+    // recall_status, not status: triggering a recall must never overwrite
+    // the token's lifecycle position (Section 3.5 of the dissertation).
+    if (doc.batch_id === batchID && doc.recall_status !== 'RECALLED'){
+      doc.recall_status = 'RECALLED'; doc.reason = reason; affected.push(key);
     }
   }
   const block = commit('triggerRecall', {batchID, reason, affected: affected.length}, [callerOrg]);
@@ -283,9 +298,11 @@ function warrantyCheck(componentID, threshold=85){
 function closeRecall(componentID, resolution, note, endorsingOrgs){
   requireEndorsement(endorsingOrgs, {minOrgs:2});
   const token = mustGet(componentID);
-  if (token.status !== 'RECALLED') throw new Error(`${componentID} is not RECALLED (status=${token.status})`);
+  if (token.recall_status !== 'RECALLED') throw new Error(`${componentID} is not RECALLED (recall_status=${token.recall_status})`);
   if (!['REPAIRED','REPLACED','RETIRED'].includes(resolution)) throw new Error(`resolution must be REPAIRED/REPLACED/RETIRED`);
-  token.status = resolution;
+  // Resolution is recorded in recall_status, not status: the token's
+  // lifecycle position (e.g. SHIPPED) is left exactly as it was.
+  token.recall_status = resolution;
   token.history = token.history || [];
   const block = commit('closeRecall', {componentID, resolution, note}, endorsingOrgs);
   token.history.push({event:`CLOSED(${resolution})`, block:block.index, txID:block.txID, note});
@@ -294,7 +311,7 @@ function closeRecall(componentID, resolution, note, endorsingOrgs){
 }
 function reviseRecallReason(batchID, amendedReason, callerOrg){
   requireEndorsement([callerOrg], {allowedOrgs:[ORGS.OEM, ORGS.REGULATOR]});
-  const targets = Array.from(state.entries()).filter(([,d])=>d.batch_id===batchID && d.status==='RECALLED');
+  const targets = Array.from(state.entries()).filter(([,d])=>d.batch_id===batchID && d.recall_status==='RECALLED');
   const block = commit('reviseRecallReason', {batchID, amendedReason, count:targets.length}, [callerOrg]);
   for(const [,doc] of targets){
     doc.history = doc.history || [];
@@ -304,12 +321,17 @@ function reviseRecallReason(batchID, amendedReason, callerOrg){
 }
 function revokeRecall(batchID, justification, callerOrg){
   requireEndorsement([callerOrg], {allowedOrgs:[ORGS.REGULATOR]});
-  const targets = Array.from(state.entries()).filter(([,d])=>d.batch_id===batchID && d.status==='RECALLED');
+  const targets = Array.from(state.entries()).filter(([,d])=>d.batch_id===batchID && d.recall_status==='RECALLED');
   const block = commit('revokeRecall', {batchID, justification, count:targets.length}, [callerOrg]);
   for(const [,doc] of targets){
-    doc.status = 'ACTIVE';
+    // Clear recall_status back to unset; status (lifecycle) was never
+    // touched, so it is never reset to a generic placeholder here. An
+    // earlier version of this simulator set status='ACTIVE' on revoke,
+    // silently destroying whatever lifecycle stage the token had actually
+    // reached, the same bug fixed in the real Go chaincode (Section 3.5).
+    doc.recall_status = undefined;
     doc.history = doc.history || [];
-    doc.history.push({event:'REVOKED', block:block.index, txID:block.txID, note:justification});
+    doc.history.push({event:'REVOKED', block:block.index, txID:block.txID, note:justification+` (lifecycle status ${doc.status} untouched)`});
   }
   return { revoked_count: targets.length, block };
 }
@@ -320,11 +342,17 @@ function getHistory(componentID){
     return { ...h, blockHash: b ? b.hash : null };
   });
 }
-function counterfeitScan(componentID){
+// provenanceCheck (renamed from counterfeitScan, matching the Go
+// chaincode's ProvenanceCheck rename, Section 4.6/4.9 of the dissertation):
+// the original name and the 'AUTHENTIC' result implied a stronger
+// guarantee than this function actually provides. It confirms ledger
+// registration and declared co-attestation count only, never the physical
+// authenticity of the item being scanned.
+function provenanceCheck(componentID){
   const token = state.get(componentID);
   if (!token) return { result:'NOT_FOUND', reason:'no token on ledger' };
   const signers = (token.org_signature||'').split('+').filter(Boolean);
-  return { result: signers.length>=2 ? 'AUTHENTIC' : 'SUSPECT', org_signature: token.org_signature };
+  return { result: signers.length>=2 ? 'REGISTERED_WITH_SUFFICIENT_ATTESTATION' : 'SUSPECT', org_signature: token.org_signature };
 }
 function mustGet(id){ const t = state.get(id); if(!t) throw new Error(`GetState(${id}) returned nil`); return t; }
 
@@ -358,7 +386,7 @@ function renderState(){
   $('statEvents').textContent = events.length;
   const rows = Array.from(state.values()).slice(-40).reverse().map(t=>`
     <tr><td>${t.token_id}</td><td>${t.batch_id}</td>
-    <td><span class="status-pill status-${t.status}">${t.status}</span></td>
+    <td><span class="status-pill status-${t.status}">${t.status}</span>${t.recall_status ? ` <span class="status-pill status-RECALLED">${t.recall_status}</span>` : ''}</td>
     <td>${t.owner}</td></tr>`).join('');
   $('stateTable').innerHTML = rows;
 }
@@ -396,7 +424,7 @@ $('btnRegister').onclick = ()=>{
 };
 
 $('btnShip').onclick = ()=>{
-  const active = Array.from(state.values()).filter(t=>t.status!=='RECALLED' && t.status!=='SHIPPED');
+  const active = Array.from(state.values()).filter(t=>t.recall_status!=='RECALLED' && t.status!=='SHIPPED');
   if(!active.length){ logMsg(false,'recordShipment','no un-shipped components — seed the batch first'); refresh(); return; }
   const target = active[active.length-1];
   const dealer = dealerCycle[dealerIdx++ % dealerCycle.length];
@@ -440,12 +468,12 @@ $('btnWarranty').onclick = ()=>{
 };
 
 $('btnClose').onclick = ()=>{
-  const recalled = Array.from(state.values()).filter(t=>t.status==='RECALLED');
+  const recalled = Array.from(state.values()).filter(t=>t.recall_status==='RECALLED');
   if(!recalled.length){ logMsg(false,'closeRecall','no RECALLED components — trigger a recall first'); refresh(); return; }
   const target = recalled[0];
   try{
     const {block} = closeRecall(target.token_id, 'REPLACED', 'Dealer swapped part under recall program', callerOrgs());
-    logMsg(true, 'closeRecall', `<b>${target.token_id}</b> RECALLED → REPLACED · tx=${block.txID} · block #${block.index}`);
+    logMsg(true, 'closeRecall', `<b>${target.token_id}</b> RECALLED → REPLACED (lifecycle status ${target.status} unchanged) · tx=${block.txID} · block #${block.index}`);
   }catch(e){ logMsg(false,'closeRecall', e.message); }
   refresh();
 };
@@ -484,8 +512,8 @@ $('btnCounterfeit').onclick = ()=>{
   const ids = Array.from(state.keys());
   const useFake = Math.random() < 0.35 || !ids.length;
   const id = useFake ? 'FAKE-PART-' + Math.floor(Math.random()*9000+1000) : ids[Math.floor(Math.random()*ids.length)];
-  const r = counterfeitScan(id);
-  logMsg(r.result==='AUTHENTIC', 'counterfeitScan', `<b>${id}</b> → ${r.result}${r.org_signature?` (sig: ${r.org_signature})`:''}`);
+  const r = provenanceCheck(id);
+  logMsg(r.result==='REGISTERED_WITH_SUFFICIENT_ATTESTATION', 'provenanceCheck', `<b>${id}</b> → ${r.result}${r.org_signature?` (sig: ${r.org_signature})`:''} — ledger registration only, not physical authenticity`);
   refresh();
 };
 

@@ -15,6 +15,29 @@ import (
 // chain (Tier-2 -> Tier-1 -> OEM -> Dealer). Org MSP names below are
 // deliberately generic (OrgXMSP) rather than a named manufacturer; map them
 // to your real MSP identifiers at network-configuration time (see README).
+//
+// Version history (chaincode package version / lifecycle sequence on the
+// evaluated Fabric channel; see README.md and the dissertation's Scenario
+// Analysis chapter for the real-network evidence backing each):
+//
+//	1.0 (sequence 1): original hardening pass. Real crypto/sha256 hashing,
+//	    deterministic (sorted) co-attestation, a batch~component
+//	    composite-key index instead of a CouchDB rich query inside
+//	    TriggerRecall, and explicit state-transition/ownership checks.
+//	2.0 (sequence 2): client-side report hashing (RegisterComponent/
+//	    RecordTest take a digest, never the report text), cross-batch
+//	    product assembly (RecordAssembly no longer requires shared batch
+//	    membership), RecallStatus separated from lifecycle Status, and
+//	    CounterfeitScan renamed to ProvenanceCheck.
+//	2.1 (sequence 3, current): RecallBatchID added to fix a cross-batch
+//	    overlap gap the 2.0 design could not represent: a product recalled
+//	    under two different batches at once had no record of which
+//	    batch's campaign actually owned the current recall, so revoking
+//	    the wrong batch could silently clear a recall it had no authority
+//	    over. TriggerRecall no longer relabels a token already recalled
+//	    under a different batch (reported as skippedOverlap instead), and
+//	    ReviseRecallReason/RevokeRecall now act only on tokens whose
+//	    RecallBatchID matches the batch named in the call.
 type SmartContract struct {
 	contractapi.Contract
 }
