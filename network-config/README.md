@@ -69,5 +69,9 @@ documented as a limitation in the dissertation (Section VI-C).
 - Crypto material (MSP certificates, TLS certificates) — generated fresh
   per-deployment by `fabric-samples/test-network`'s `cryptogen`/Fabric CA
   scripts, not committed to any repository for obvious security reasons.
-- A third `Org3MSP` (Regulator) network definition — never deployed in
-  this evaluation; see the dissertation's Limitations section.
+- The full third-organisation network definition and generated crypto
+  material are not reproduced in this repository. `Org3MSP` (Regulator)
+  was nevertheless added to the live test channel later in the evaluation;
+  the retained invoke/query evidence is in
+  `evidence/real_fabric_org3_regulator_scenario.log`. As with Org1/Org2,
+  generated MSP and TLS material is intentionally not committed.
