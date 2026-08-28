@@ -13,13 +13,17 @@ production system. Organisation names are generic (`OEM`, `Tier1Supplier`,
 `Tier2Supplier`, `Regulator`, `Dealer`) rather than tied to any named
 manufacturer.
 
-The retained live-network evidence evaluates chaincode
+Scenarios 1-7's retained live-network evidence evaluates chaincode
 `component-traceability` version 2.1, sequence 3, tagged `v2.1-submission`.
-The current source adds the backwards-compatible, unit-tested
-`EvidenceReference`/`AttachEvidence` extension; it is not retroactively
-claimed as part of those v2.1 deployment logs. `v2.0-submission` is an
-earlier, superseded tag kept for history. See the chaincode's top-of-file
-comments and the evidence log filenames below for the evidence boundary.
+The `EvidenceReference`/`AttachEvidence`/`GetEvidence` extension was added
+after that evaluation and was initially unit-tested only; it has since also
+been deployed and exercised live as version 2.2, sequence 4, on the same
+three-organisation network (`evidence/real_fabric_run5_evidence_extension.log`):
+a component registered, two typed evidence references attached and both
+retained by `GetEvidence`, and both negative cases (duplicate evidence ID,
+malformed digest) rejected as designed. `v2.0-submission` is an earlier,
+superseded tag kept for history. See the chaincode's top-of-file comments
+and the evidence log filenames below for the exact evidence boundary.
 
 ## What is actually in this repo
 
@@ -111,6 +115,13 @@ comments and the evidence log filenames below for the evidence boundary.
     product recalled under two different batches at once, proving that
     revoking the wrong batch leaves the real recall untouched while
     revoking the right one clears it);
+  - `real_fabric_run5_evidence_extension.log` (v2.2, sequence 4: the
+    `EvidenceReference`/`AttachEvidence`/`GetEvidence` extension exercised
+    live for the first time, not only unit-tested — package/install/
+    approve/commit across all three organisations, a component
+    registered, two typed evidence references attached and both retained,
+    and both negative cases (duplicate evidence ID, malformed digest)
+    rejected);
   - `benchmark_N10_raw.csv`, `benchmark_N100_raw.csv`,
     `benchmark_N1000B_raw.csv`, `benchmark_run.log`, and
     `benchmark_summary.txt` (v2.1, produced by

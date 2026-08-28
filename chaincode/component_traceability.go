@@ -38,10 +38,14 @@ import (
 //	    under a different batch (reported as skippedOverlap instead), and
 //	    ReviseRecallReason/RevokeRecall now act only on tokens whose
 //	    RecallBatchID matches the batch named in the call.
-//	Evidence-model extension (current source, unit-tested but not attributed
-//	    to the retained v2.1 live-network logs): append-only
-//	    EvidenceReference records plus AttachEvidence/GetEvidence, while
-//	    preserving the v2.1 transaction signatures and legacy DataHash field.
+//	2.2 (sequence 4): append-only EvidenceReference records plus
+//	    AttachEvidence/GetEvidence, preserving the v2.1 transaction
+//	    signatures and legacy DataHash field. Unit-tested from the start;
+//	    also exercised live on the same three-organisation network
+//	    (evidence/real_fabric_run5_evidence_extension.log): a component
+//	    registered, two typed evidence references attached and both
+//	    retained by GetEvidence, and both negative cases (duplicate
+//	    evidence ID, malformed digest) rejected as designed.
 type SmartContract struct {
 	contractapi.Contract
 }

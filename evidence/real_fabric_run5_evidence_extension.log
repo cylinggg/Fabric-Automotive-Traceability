@@ -1,0 +1,92 @@
+=== Scenario 8 (FABRIC TEST-NETWORK): first live-network deployment and test
+=== of the EvidenceReference / AttachEvidence / GetEvidence extension.
+===
+=== Produced by scripts/scenario_8_evidence_extension_live.sh against the
+=== same local three-organisation Fabric test-network (Org1=OEM, Org2=Tier-1
+=== Supplier, Org3=Regulator) used for Scenarios 5-7. Console output below
+=== is unedited real command output (ANSI colour codes stripped for
+=== readability); only the block-comment headers (===) were added
+=== afterwards to label each step for a reader.
+===
+=== Steps 1-5: repackage the current chaincode source (which now includes
+=== AttachEvidence/GetEvidence, added after the v2.1/sequence 3 deployment
+=== that Scenarios 1-7 evaluate) as version 2.2, sequence 4; install on all
+=== three organisations; approve; commit.
+
+=== 1. Package current chaincode source (includes AttachEvidence/GetEvidence) as v2.2 ===
+Package ID: component-traceability_2.2:fe8a701e86eb9827ea8d22e8cd6f679580a7cee42654577eb6a5baf79b41053c
+
+=== 2. Install on Org1, Org2, Org3 ===
+--- Org1 ---
+2026-08-28 15:08:15.181 BST 0001 INFO [cli.lifecycle.chaincode] submitInstallProposal -> Installed remotely: response:<status:200 payload:"\n[component-traceability_2.2:fe8a701e86eb9827ea8d22e8cd6f679580a7cee42654577eb6a5baf79b41053c\022\032component-traceability_2.2" >
+2026-08-28 15:08:15.182 BST 0002 INFO [cli.lifecycle.chaincode] submitInstallProposal -> Chaincode code package identifier: component-traceability_2.2:fe8a701e86eb9827ea8d22e8cd6f679580a7cee42654577eb6a5baf79b41053c
+--- Org2 ---
+2026-08-28 15:08:27.200 BST 0001 INFO [cli.lifecycle.chaincode] submitInstallProposal -> Installed remotely: response:<status:200 payload:"\n[component-traceability_2.2:fe8a701e86eb9827ea8d22e8cd6f679580a7cee42654577eb6a5baf79b41053c\022\032component-traceability_2.2" >
+2026-08-28 15:08:27.200 BST 0002 INFO [cli.lifecycle.chaincode] submitInstallProposal -> Chaincode code package identifier: component-traceability_2.2:fe8a701e86eb9827ea8d22e8cd6f679580a7cee42654577eb6a5baf79b41053c
+--- Org3 ---
+2026-08-28 15:08:39.517 BST 0001 INFO [cli.lifecycle.chaincode] submitInstallProposal -> Installed remotely: response:<status:200 payload:"\n[component-traceability_2.2:fe8a701e86eb9827ea8d22e8cd6f679580a7cee42654577eb6a5baf79b41053c\022\032component-traceability_2.2" >
+2026-08-28 15:08:39.517 BST 0002 INFO [cli.lifecycle.chaincode] submitInstallProposal -> Chaincode code package identifier: component-traceability_2.2:fe8a701e86eb9827ea8d22e8cd6f679580a7cee42654577eb6a5baf79b41053c
+
+=== 3. Approve v2.2 sequence 4 for Org1, Org2, Org3 ===
+2026-08-28 15:08:54.155 BST 0001 INFO [chaincodeCmd] ClientWait -> txid [01e99c47b92e7af01941393a0676318b05c020a2b8f6a535a3e28a93bc4bbd65] committed with status (VALID) at localhost:7051
+2026-08-28 15:08:56.402 BST 0001 INFO [chaincodeCmd] ClientWait -> txid [227f32c59095a2d0ddf54494cd0e55ce486cfea0c2ec2a9eb3dca095baf9a321] committed with status (VALID) at localhost:9051
+2026-08-28 15:08:58.465 BST 0001 INFO [chaincodeCmd] ClientWait -> txid [de67d2c1d187588c8294f751d5359d5bc0bb1033dfcf50e945994b42c77c56f6] committed with status (VALID) at localhost:11051
+
+=== 4. checkcommitreadiness ===
+{
+	"approvals": {
+		"Org1MSP": true,
+		"Org2MSP": true,
+		"Org3MSP": true
+	}
+}
+
+=== 5. Commit v2.2 sequence 4 ===
+2026-08-28 15:09:10.887 BST 0001 INFO [chaincodeCmd] ClientWait -> txid [4f56606e30b9d53baa8fe47754a63addd04a946a4d3b839bea5aa0437bac68a3] committed with status (VALID) at localhost:11051
+2026-08-28 15:09:11.026 BST 0002 INFO [chaincodeCmd] ClientWait -> txid [4f56606e30b9d53baa8fe47754a63addd04a946a4d3b839bea5aa0437bac68a3] committed with status (VALID) at localhost:9051
+2026-08-28 15:09:11.055 BST 0003 INFO [chaincodeCmd] ClientWait -> txid [4f56606e30b9d53baa8fe47754a63addd04a946a4d3b839bea5aa0437bac68a3] committed with status (VALID) at localhost:7051
+
+=== querycommitted ===
+Committed chaincode definition for chaincode 'component-traceability' on channel 'mychannel':
+Version: 2.2, Sequence: 4, Endorsement Plugin: escc, Validation Plugin: vscc, Approvals: [Org1MSP: true, Org2MSP: true, Org3MSP: true]
+
+=== Steps 6-11: register a fresh token and exercise AttachEvidence/GetEvidence
+=== against the newly committed v2.2 definition, including both negative
+=== cases (duplicate evidence ID, malformed digest). This portion is the
+=== unedited output of scripts/scenario_8_evidence_extension_live.sh's
+=== steps 6-11 (ANSI colour codes stripped only).
+
+=== 6. RegisterComponent EVID-TEST-002 (fresh token for this test) ===
+2026-08-28 15:12:30.417 BST 0001 INFO [chaincodeCmd] ClientWait -> txid [beed6d4b473dcc1ae3d01755849c549673d1ac0ee90de7b2b84fe3c2f4cd7dca] committed with status (VALID) at localhost:7051
+2026-08-28 15:12:30.422 BST 0002 INFO [chaincodeCmd] ClientWait -> txid [beed6d4b473dcc1ae3d01755849c549673d1ac0ee90de7b2b84fe3c2f4cd7dca] committed with status (VALID) at localhost:9051
+2026-08-28 15:12:30.422 BST 0003 INFO [chaincodeCmd] chaincodeInvokeOrQuery -> Chaincode invoke successful. result: status:200
+
+=== 7. AttachEvidence #1: QC test report ===
+2026-08-28 15:12:32.533 BST 0001 INFO [chaincodeCmd] ClientWait -> txid [7df73d1f72a3e8fb67da9946512be621d2d7b87576362850f9254458dea1b54b] committed with status (VALID) at localhost:7051
+2026-08-28 15:12:32.534 BST 0002 INFO [chaincodeCmd] ClientWait -> txid [7df73d1f72a3e8fb67da9946512be621d2d7b87576362850f9254458dea1b54b] committed with status (VALID) at localhost:9051
+2026-08-28 15:12:32.534 BST 0003 INFO [chaincodeCmd] chaincodeInvokeOrQuery -> Chaincode invoke successful. result: status:200
+
+=== 8. AttachEvidence #2: shipping manifest (different evidence ID, same token) ===
+2026-08-28 15:12:34.625 BST 0001 INFO [chaincodeCmd] ClientWait -> txid [d3b5c00a67123c9e3aa23a44657f9fa671fa265c62fcde8bc5c4da87621d8589] committed with status (VALID) at localhost:7051
+2026-08-28 15:12:34.626 BST 0002 INFO [chaincodeCmd] ClientWait -> txid [d3b5c00a67123c9e3aa23a44657f9fa671fa265c62fcde8bc5c4da87621d8589] committed with status (VALID) at localhost:9051
+2026-08-28 15:12:34.626 BST 0003 INFO [chaincodeCmd] chaincodeInvokeOrQuery -> Chaincode invoke successful. result: status:200
+
+=== 9. Negative case: duplicate evidence ID EV-QC-1 (expect rejection) ===
+Error: endorsement failure during invoke. response: status:500 message:"attachEvidence rejected: evidence EV-QC-1 already exists on token EVID-TEST-002"
+
+=== 10. Negative case: malformed digest (expect rejection) ===
+Error: endorsement failure during invoke. response: status:500 message:"attachEvidence rejected: expected a 64-character SHA-256 hex digest, got length 15"
+
+=== 11. GetEvidence (query): confirm both references retained ===
+[{"evidenceId":"EV-QC-1","documentType":"QC_TEST_REPORT","sha256":"9d3cf5ea1e3a3007d9ca07517bf8ff44bfb0bf9d8c86bbc224237caa7c1e30d1","hashAlgorithm":"SHA-256","producerMsp":"Tier1SupplierMSP","repositoryRef":"repo://tier1-docs/qc-reports/EVID-TEST-002.pdf","submittedByMsp":"Org1MSP","submittedAt":"2026-08-28T14:12:30.494213Z","schemaVersion":"1.0"},{"evidenceId":"EV-SHIP-1","documentType":"SHIPPING_MANIFEST","sha256":"fb8677eca7242731f398fcf44811365c05aa32e63888a704afa2ae01ebda3e97","hashAlgorithm":"SHA-256","producerMsp":"Tier1SupplierMSP","repositoryRef":"repo://tier1-docs/manifests/EVID-TEST-002.pdf","submittedByMsp":"Org1MSP","submittedAt":"2026-08-28T14:12:32.590588Z","schemaVersion":"1.0"}]
+
+=== Summary: both evidence references are retained on the token in
+=== submission order, with SubmittedByMsp correctly showing the Fabric-
+=== authenticated caller identity (Org1MSP) rather than the caller-supplied
+=== ProducerMsp field (Tier1SupplierMSP) -- the same distinction the
+=== dissertation's discussion of this extension makes in prose, now backed
+=== by a real transaction rather than only a unit test. Both negative cases
+=== (duplicate evidence ID, malformed digest) were rejected as designed,
+=== with no partial write: a repeat GetEvidence query (not shown above,
+=== run manually) confirmed the token's evidence array still contained
+=== exactly the two accepted references, not three.
