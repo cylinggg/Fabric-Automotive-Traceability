@@ -284,4 +284,5 @@ encryption or plagiarism/similarity detection.
 
 ## Licence
 
-Code released for academic/educational reuse alongside the dissertation.
+Code released for academic/educational reuse alongside the dissertation,
+provided as-is without warranty, for evaluation and citation purposes.
