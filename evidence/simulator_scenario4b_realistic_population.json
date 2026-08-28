@@ -1,0 +1,40 @@
+{
+  "errors": [],
+  "totalRegistered": 37,
+  "batchSizes": {
+    "BATCH-2025-CAL-201": 8,
+    "BATCH-2025-CAL-202": 5,
+    "BATCH-2025-CAL-310": 11,
+    "BATCH-2025-CAL-311": 4,
+    "BATCH-2025-CAL-450": 9
+  },
+  "duplicateRejected": true,
+  "duplicateError": "BATCH-2025-CAL-201-C001 already registered",
+  "shippedCount": 32,
+  "unshippedCount": 5,
+  "warrantyChecks": {
+    "warrantyVoid": 3,
+    "warrantyHonoured": 3
+  },
+  "unauthorisedRecallRejected": true,
+  "unauthorisedRecallError": "Endorsement policy failed: caller must be one of [OEM_MSP, RegulatorMSP]",
+  "recallAffectedCount": 11,
+  "recallExpectedCount": 11,
+  "recallNotifiedDealers": [
+    "Dealer-Bristol",
+    "Dealer-Leeds",
+    "Dealer-Glasgow",
+    "Dealer-Newcastle",
+    "Dealer-Manchester",
+    "Tier2Supplier-Coventry"
+  ],
+  "unaffectedOutsideTarget": 26,
+  "wronglyAffected": 0,
+  "totalOutsideTarget": 26,
+  "provenanceGenuine": "REGISTERED_WITH_SUFFICIENT_ATTESTATION",
+  "provenanceFabricated": "NOT_FOUND",
+  "reviseAmendedCount": 10,
+  "revokeCount": 10,
+  "finalBlockCount": 79,
+  "finalEventCount": 81
+}
