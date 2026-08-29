@@ -520,8 +520,8 @@ func TestProvenanceCheck_DistinguishesRegisteredFromUnknown(t *testing.T) {
 		t.Fatalf("setup registration failed: %v", err)
 	}
 	out, err := s.ProvenanceCheck(ctx, "COMP-P1")
-	if err != nil || !strings.Contains(out, "REGISTERED_WITH_SUFFICIENT_ATTESTATION") {
-		t.Fatalf("ProvenanceCheck on a registered component = %q, err=%v, want REGISTERED_WITH_SUFFICIENT_ATTESTATION", out, err)
+	if err != nil || !strings.Contains(out, "REGISTERED_WITH_DECLARED_PARTICIPANTS") {
+		t.Fatalf("ProvenanceCheck on a registered component = %q, err=%v, want REGISTERED_WITH_DECLARED_PARTICIPANTS", out, err)
 	}
 	out, err = s.ProvenanceCheck(ctx, "COMP-DOES-NOT-EXIST")
 	if err != nil || !strings.Contains(out, "NOT_FOUND") {
@@ -620,6 +620,233 @@ func TestTriggerRecall_OverlappingCampaignDoesNotRelabelToken(t *testing.T) {
 	product, err = s.mustGetToken(ctx, "PRODUCT-OV")
 	if err != nil || product.RecallStatus != "" || product.RecallBatchID != "" {
 		t.Fatalf("revoking the owning batch (BATCH-OV-X) should clear RecallStatus and RecallBatchID, got RecallStatus=%q RecallBatchID=%q (err=%v)", product.RecallStatus, product.RecallBatchID, err)
+	}
+}
+
+// --- caller authorisation (supervisor feedback: several state-changing
+// functions checked only caller-supplied business data -- a declared
+// fromOwner string, a declared supplierID, CoAttestingOrgs -- never the
+// caller's own authenticated MSP identity, so an enrolled but unrelated
+// participant could act on someone else's token) ---
+
+func TestRegisterComponent_RejectsRegulatorCaller(t *testing.T) {
+	s := &SmartContract{}
+	stub := newFakeStub("tx1")
+	ctx := &fakeCtx{stub: stub, callerID: regulatorOrgMSP}
+
+	err := s.RegisterComponent(ctx, "COMP-AUTH1", "BATCH-AUTH", "Tier2Supplier", reportHash("r"), "Org2MSP")
+	if err == nil {
+		t.Fatalf("RegisterComponent from the Regulator org should be rejected, got nil error")
+	}
+	if !strings.Contains(err.Error(), "not authorised") {
+		t.Fatalf("expected an authorisation error, got: %v", err)
+	}
+}
+
+func TestRegisterComponent_SetsOwnerToCallerNotSupplierIDString(t *testing.T) {
+	s := &SmartContract{}
+	stub := newFakeStub("tx1")
+	ctx := &fakeCtx{stub: stub, callerID: tier1OrgMSP}
+
+	// supplierID is an arbitrary caller-supplied label; it must never become
+	// the token's real Owner, since that is exactly the
+	// business-data-as-authorisation gap supervisor review identified.
+	if err := s.RegisterComponent(ctx, "COMP-AUTH2", "BATCH-AUTH", "SomeoneElsesName", reportHash("r"), "Org1MSP"); err != nil {
+		t.Fatalf("registration failed: %v", err)
+	}
+	tok, err := s.mustGetToken(ctx, "COMP-AUTH2")
+	if err != nil {
+		t.Fatalf("failed to read back token: %v", err)
+	}
+	if tok.Owner != tier1OrgMSP {
+		t.Fatalf("Owner = %q, want the caller's own authenticated MSP (%q), not the supplierID string", tok.Owner, tier1OrgMSP)
+	}
+}
+
+func TestRecordTest_RejectsNonOwnerCaller(t *testing.T) {
+	s := &SmartContract{}
+	stub := newFakeStub("tx1")
+	oemCtx := &fakeCtx{stub: stub, callerID: oemOrgMSP}
+	tier1Ctx := &fakeCtx{stub: stub, callerID: tier1OrgMSP}
+
+	if err := s.RegisterComponent(oemCtx, "COMP-AUTH3", "BATCH-AUTH", "Tier2Supplier", reportHash("r"), "Org2MSP"); err != nil {
+		t.Fatalf("setup registration failed: %v", err)
+	}
+	// COMP-AUTH3 is owned by the OEM (the caller who registered it); an
+	// enrolled but unrelated Tier-1 identity must not be able to record its
+	// test result merely by naming the right component ID.
+	err := s.RecordTest(tier1Ctx, "COMP-AUTH3", reportHash("t"), "Org2MSP")
+	if err == nil {
+		t.Fatalf("RecordTest from a non-owner caller should be rejected, got nil error")
+	}
+	if !strings.Contains(err.Error(), "is not the current owner") {
+		t.Fatalf("expected an ownership authorisation error, got: %v", err)
+	}
+}
+
+func TestRecordShipment_RejectsNonOwnerCaller(t *testing.T) {
+	s := &SmartContract{}
+	stub := newFakeStub("tx1")
+	oemCtx := &fakeCtx{stub: stub, callerID: oemOrgMSP}
+	tier1Ctx := &fakeCtx{stub: stub, callerID: tier1OrgMSP}
+
+	if err := s.RegisterComponent(oemCtx, "COMP-AUTH4", "BATCH-AUTH", "Tier2Supplier", reportHash("r"), "Org2MSP"); err != nil {
+		t.Fatalf("setup registration failed: %v", err)
+	}
+	if err := s.RecordTest(oemCtx, "COMP-AUTH4", reportHash("t"), "Org2MSP"); err != nil {
+		t.Fatalf("setup RecordTest failed: %v", err)
+	}
+	// Still owned by the OEM; the Tier-1 org never held custody and must not
+	// be able to ship it merely by naming itself as fromOwner -- fromOwner
+	// is no longer trusted for authorisation at all (see RecordShipment's
+	// doc comment).
+	err := s.RecordShipment(tier1Ctx, "COMP-AUTH4", oemOrgMSP, tier1OrgMSP, "Org2MSP")
+	if err == nil {
+		t.Fatalf("RecordShipment from a non-owner caller should be rejected, got nil error")
+	}
+	if !strings.Contains(err.Error(), "is not the current owner") {
+		t.Fatalf("expected an ownership authorisation error, got: %v", err)
+	}
+}
+
+func TestRecordAssembly_RejectsNonOEMCaller(t *testing.T) {
+	s := &SmartContract{}
+	stub := newFakeStub("tx1")
+	oemCtx := &fakeCtx{stub: stub, callerID: oemOrgMSP}
+	tier1Ctx := &fakeCtx{stub: stub, callerID: tier1OrgMSP}
+
+	shipComponent(t, s, oemCtx, "COMP-AUTH5", "BATCH-AUTH5")
+
+	err := s.RecordAssembly(tier1Ctx, "PRODUCT-AUTH5", "COMP-AUTH5", "RECIPE-AUTH5", "Org1MSP")
+	if err == nil {
+		t.Fatalf("RecordAssembly from a non-OEM caller should be rejected, got nil error")
+	}
+	if !strings.Contains(err.Error(), "not authorised") {
+		t.Fatalf("expected an authorisation error, got: %v", err)
+	}
+}
+
+func TestRecordDelivery_RejectsNonOwnerCaller(t *testing.T) {
+	s := &SmartContract{}
+	stub := newFakeStub("tx1")
+	oemCtx := &fakeCtx{stub: stub, callerID: oemOrgMSP}
+	tier1Ctx := &fakeCtx{stub: stub, callerID: tier1OrgMSP}
+
+	shipComponent(t, s, oemCtx, "COMP-AUTH6", "BATCH-AUTH6")
+	if err := s.RecordAssembly(oemCtx, "PRODUCT-AUTH6", "COMP-AUTH6", "RECIPE-AUTH6", "Org2MSP"); err != nil {
+		t.Fatalf("setup RecordAssembly failed: %v", err)
+	}
+	// The product is owned by the OEM after assembly; Tier-1 never held it.
+	err := s.RecordDelivery(tier1Ctx, "PRODUCT-AUTH6", "Dealer1", "Org1MSP")
+	if err == nil {
+		t.Fatalf("RecordDelivery from a non-owner caller should be rejected, got nil error")
+	}
+	if !strings.Contains(err.Error(), "is not the current owner") {
+		t.Fatalf("expected an ownership authorisation error, got: %v", err)
+	}
+}
+
+func TestAttachEvidence_RejectsNonOwnerCaller(t *testing.T) {
+	s := &SmartContract{}
+	stub := newFakeStub("tx1")
+	oemCtx := &fakeCtx{stub: stub, callerID: oemOrgMSP}
+	tier1Ctx := &fakeCtx{stub: stub, callerID: tier1OrgMSP}
+
+	if err := s.RegisterComponent(oemCtx, "COMP-AUTH7", "BATCH-AUTH7", "Tier2Supplier", reportHash("r"), "Org2MSP"); err != nil {
+		t.Fatalf("setup registration failed: %v", err)
+	}
+	err := s.AttachEvidence(tier1Ctx, "COMP-AUTH7", "EVID-AUTH7", "QUALITY_TEST_REPORT", reportHash("v"), "Org2MSP", "repo:1", "Org1MSP")
+	if err == nil {
+		t.Fatalf("AttachEvidence from a non-owner caller should be rejected, got nil error")
+	}
+	if !strings.Contains(err.Error(), "is not the current owner") {
+		t.Fatalf("expected an ownership authorisation error, got: %v", err)
+	}
+}
+
+func TestCloseRecall_RejectsUnauthorisedCaller(t *testing.T) {
+	s := &SmartContract{}
+	stub := newFakeStub("tx1")
+	oemCtx := &fakeCtx{stub: stub, callerID: oemOrgMSP}
+	tier1Ctx := &fakeCtx{stub: stub, callerID: tier1OrgMSP}
+
+	if err := s.RegisterComponent(oemCtx, "COMP-AUTH8", "BATCH-AUTH8", "Tier2Supplier", reportHash("r"), "Org2MSP"); err != nil {
+		t.Fatalf("setup registration failed: %v", err)
+	}
+	if _, err := s.TriggerRecall(oemCtx, "BATCH-AUTH8", "defect"); err != nil {
+		t.Fatalf("setup TriggerRecall failed: %v", err)
+	}
+	// An ordinary enrolled participant with no OEM/Regulator role must not
+	// be able to resolve a safety recall.
+	_, err := s.CloseRecall(tier1Ctx, "COMP-AUTH8", "REPAIRED", "fixed", "Org1MSP")
+	if err == nil {
+		t.Fatalf("CloseRecall from a non-OEM/Regulator caller should be rejected, got nil error")
+	}
+	if !strings.Contains(err.Error(), "not authorised") {
+		t.Fatalf("expected an authorisation error, got: %v", err)
+	}
+}
+
+// --- RecordUsageLog (supervisor feedback: the paper says DELIVERED is
+// required, but the code previously checked only requireNotRecalled) ---
+
+func TestRecordUsageLog_RejectsPreDeliveryStatus(t *testing.T) {
+	s := &SmartContract{}
+	stub := newFakeStub("tx1")
+	oemCtx := &fakeCtx{stub: stub, callerID: oemOrgMSP}
+
+	shipComponent(t, s, oemCtx, "COMP-AUTH9", "BATCH-AUTH9") // status: SHIPPED, not DELIVERED
+
+	err := s.RecordUsageLog(oemCtx, "COMP-AUTH9", 90.0, "Org2MSP")
+	if err == nil {
+		t.Fatalf("RecordUsageLog on a non-DELIVERED component should be rejected, got nil error")
+	}
+	if !strings.Contains(err.Error(), "invalid state transition") {
+		t.Fatalf("expected an invalid-state-transition error, got: %v", err)
+	}
+}
+
+func TestRecordUsageLog_RejectsNonOEMCaller(t *testing.T) {
+	s := &SmartContract{}
+	stub := newFakeStub("tx1")
+	oemCtx := &fakeCtx{stub: stub, callerID: oemOrgMSP}
+	tier1Ctx := &fakeCtx{stub: stub, callerID: tier1OrgMSP}
+
+	shipComponent(t, s, oemCtx, "COMP-AUTH10", "BATCH-AUTH10")
+	if err := s.RecordAssembly(oemCtx, "PRODUCT-AUTH10", "COMP-AUTH10", "RECIPE-AUTH10", "Org2MSP"); err != nil {
+		t.Fatalf("setup RecordAssembly failed: %v", err)
+	}
+	if err := s.RecordDelivery(oemCtx, "PRODUCT-AUTH10", "Dealer1", "Org2MSP"); err != nil {
+		t.Fatalf("setup RecordDelivery failed: %v", err)
+	}
+
+	err := s.RecordUsageLog(tier1Ctx, "COMP-AUTH10", 90.0, "Org1MSP")
+	if err == nil {
+		t.Fatalf("RecordUsageLog from a non-OEM caller should be rejected, got nil error")
+	}
+	if !strings.Contains(err.Error(), "not authorised") {
+		t.Fatalf("expected an authorisation error, got: %v", err)
+	}
+}
+
+func TestRecordUsageLog_SucceedsForOEMOnDeliveredComponent(t *testing.T) {
+	s := &SmartContract{}
+	stub := newFakeStub("tx1")
+	oemCtx := &fakeCtx{stub: stub, callerID: oemOrgMSP}
+
+	shipComponent(t, s, oemCtx, "COMP-AUTH11", "BATCH-AUTH11")
+	if err := s.RecordAssembly(oemCtx, "PRODUCT-AUTH11", "COMP-AUTH11", "RECIPE-AUTH11", "Org2MSP"); err != nil {
+		t.Fatalf("setup RecordAssembly failed: %v", err)
+	}
+	if err := s.RecordDelivery(oemCtx, "PRODUCT-AUTH11", "Dealer1", "Org2MSP"); err != nil {
+		t.Fatalf("setup RecordDelivery failed: %v", err)
+	}
+	if err := s.RecordUsageLog(oemCtx, "COMP-AUTH11", 92.0, "Org2MSP"); err != nil {
+		t.Fatalf("RecordUsageLog by the OEM on a DELIVERED component should succeed, got: %v", err)
+	}
+	tok, err := s.mustGetToken(oemCtx, "COMP-AUTH11")
+	if err != nil || tok.UsageAvgTempC == nil || *tok.UsageAvgTempC != 92.0 {
+		t.Fatalf("usage log not recorded correctly: %+v (err=%v)", tok, err)
 	}
 }
 

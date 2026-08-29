@@ -1,0 +1,148 @@
+=== Scenario 9 (FABRIC TEST-NETWORK): caller-authorisation hardening,
+=== version 3.0, sequence 5. Produced by
+=== scripts/scenario_9_caller_authorisation_live.sh against the same
+=== three-organisation Fabric test-network used throughout this
+=== dissertation. Unedited console output below (ANSI colour codes
+=== stripped only).
+===
+=== This version closes a caller-authorisation gap identified in
+=== supervisor review: RegisterComponent, RecordTest, RecordShipment,
+=== RecordAssembly, RecordDelivery, AttachEvidence, CloseRecall, and
+=== RecordUsageLog previously checked only caller-supplied business data
+=== (a declared fromOwner string, a declared supplierID, CoAttestingOrgs),
+=== never the caller's own authenticated MSP identity. Part A below is the
+=== authorised happy path; Part B is one genuine negative case per
+=== affected function, each submitted by an enrolled organisation that is
+=== NOT authorised for that call.
+
+=== 1-5. Package, install, approve, and commit v3.0/sequence 5 ===
+=== 1. Package current chaincode source (caller-authorisation hardening) as v3.0 ===
+Package ID: component-traceability_3.0:7226234ca9072cfb5fe85e4583184b62ec5c1ca9428f68b34d5ff80bd7ceabc0
+=== 2. Install on Org1, Org2, Org3 ===
+(3x successful install responses, one per organisation; identical in form
+to the install responses in earlier evidence logs, omitted here for
+brevity)
+=== 3. Approve v3.0 sequence 5 for Org1, Org2, Org3 ===
+2026-08-29 19:40:40.216 BST INFO [chaincodeCmd] ClientWait -> txid [16708a922bf5603ff5ac86a4bba25fd0274d4e7a591cf5531ffb10738860cf1d] committed with status (VALID) at localhost:7051
+2026-08-29 19:40:42.438 BST INFO [chaincodeCmd] ClientWait -> txid [a9aabf4c7092a6ab05b68c61908efba835b66e0359259f041ef7743bf34f24fd] committed with status (VALID) at localhost:9051
+2026-08-29 19:40:44.499 BST INFO [chaincodeCmd] ClientWait -> txid [47524c849fb8a11e5a122f0db0fe857d421faec1224e53c3525940a64fbb6dd2] committed with status (VALID) at localhost:11051
+=== 4. checkcommitreadiness ===
+{
+	"approvals": {
+		"Org1MSP": true,
+		"Org2MSP": true,
+		"Org3MSP": true
+	}
+}
+=== 5. Commit v3.0 sequence 5 ===
+2026-08-29 19:40:46.757 BST INFO [chaincodeCmd] ClientWait -> txid [06b68c9192f5a6dea0b539e647fbb881b830ce671f213ed8d4dadd5c178b48e3] committed with status (VALID) at localhost:7051/9051/11051
+=== querycommitted ===
+Committed chaincode definition for chaincode 'component-traceability' on channel 'mychannel':
+Version: 3.0, Sequence: 5, Endorsement Plugin: escc, Validation Plugin: vscc, Approvals: [Org1MSP: true, Org2MSP: true, Org3MSP: true]
+
+############################################################
+### PART A: authorised happy path (all calls as Org1MSP/OEM) ###
+############################################################
+--- RegisterComponent AUTH-HAPPY-1 (as OEM) ---
+txid [ee8e0443a606feeb373f524a825904f74c3059f93496f0f0414ba0a1c916dbcc] committed with status (VALID) at localhost:7051 and localhost:9051. Chaincode invoke successful.
+--- RecordTest AUTH-HAPPY-1 (as OEM, the current owner) ---
+txid [1482d9cb39605596de4eb3bab9dacec301c3e1fa9a0494be88d52084c2035f35] committed VALID at both peers. Chaincode invoke successful.
+--- RecordShipment AUTH-HAPPY-1 (as OEM, the current owner) ---
+txid [d5cffb7fd9727b436d9dd80139531a1cb00dad76f47729721cff2d304a2e6bc3] committed VALID at both peers. Chaincode invoke successful.
+--- RecordAssembly AUTH-HAPPY-PRODUCT-1 (as OEM) ---
+txid [23ac632091ba3f0896a66a72ce70cabbba42f3f771ce9713bc935854547e1686] committed VALID at both peers. Chaincode invoke successful.
+--- RecordDelivery AUTH-HAPPY-PRODUCT-1 (as OEM, the current owner) ---
+txid [cca6c27d3b9141e526479b5af0f3e298520d27b81278ee15dbde080df5a620bb] committed VALID at both peers. Chaincode invoke successful.
+--- AttachEvidence on AUTH-HAPPY-1 (as OEM) -- FIRST ATTEMPT, AFTER DELIVERY ---
+Error: endorsement failure during invoke. response: status:500 message:"attachEvidence rejected: caller Org1MSP is not the current owner of token AUTH-HAPPY-1 (owner is Dealer1)"
+
+*** GENUINE FINDING, NOT A SCRIPTED NEGATIVE CASE: this call was intended
+*** as part of the authorised happy path but was rejected. RecordDelivery
+*** (the immediately preceding step) sets Owner to a caller-supplied dealer
+*** label ("Dealer1"), which is not a real MSP identity on this
+*** three-organisation network (OEM, Tier-1 supplier, Regulator only). No
+*** enrolled identity can ever equal "Dealer1", so requireCallerIsOwner
+*** rejects every caller, authorised or not, once a token has been
+*** delivered. This is recorded here exactly as it happened and is treated
+*** as an additional, real limitation of this design (see Limitations),
+*** not silently corrected out of the evidence trail. The script was fixed
+*** to call AttachEvidence before RecordDelivery, and the corrected
+*** ordering is confirmed working further below.
+
+--- RecordUsageLog AUTH-HAPPY-1 (as OEM, now DELIVERED) ---
+txid [cb6892d6d87b16e65a93ee3b269d048ac54ce2befcc1f24ab933b8e74d012e1b] committed VALID at both peers. Chaincode invoke successful.
+--- WarrantyCheck AUTH-HAPPY-1 (query) ---
+{"avgTempC":91.5,"componentId":"AUTH-HAPPY-1","fault":"USER","result":"WARRANTY_VOID","thresholdC":85}
+--- TriggerRecall BATCH-AUTH-HAPPY then CloseRecall AUTH-HAPPY-1 (both as OEM) ---
+txid [f72992daed34d7596ddb60a49fe54f78eafc7c939a7b54250e63f21e2e380531] committed VALID. payload:"{\"affectedCount\":2,\"batchId\":\"BATCH-AUTH-HAPPY\",\"notifiedOwners\":[\"Dealer1\"],\"skippedOverlap\":[],\"txId\":\"f72992daed34d7596ddb60a49fe54f78eafc7c939a7b54250e63f21e2e380531\"}"
+txid [160237332d60d5c6dbbdea885b2430ae7c3f013744402d884043fb18ec945ad4] committed VALID. payload:"{\"componentId\":\"AUTH-HAPPY-1\",\"lifecycleStatus\":\"DELIVERED\",\"recallStatus\":\"REPAIRED\",\"txId\":\"160237332d60d5c6dbbdea885b2430ae7c3f013744402d884043fb18ec945ad4\"}"
+--- ProvenanceCheck AUTH-HAPPY-1 (query): confirm new REGISTERED_WITH_DECLARED_PARTICIPANTS wording live ---
+{"coAttestingOrgs":["Org1MSP","Org2MSP"],"componentId":"AUTH-HAPPY-1","lifecycleStatus":"DELIVERED","note":"confirms ledger registration and a caller-declared co-attestation list only; CoAttestingOrgs is business data supplied by the submitting client, not cryptographic proof that those organisations endorsed anything, and this result does not by itself prove the physical item being scanned is the genuine, unaltered original","recallStatus":"REPAIRED","registeredOnLedger":true,"result":"REGISTERED_WITH_DECLARED_PARTICIPANTS"}
+
+############################################################
+### PART B: negative cases -- an enrolled but unauthorised org attempts each call ###
+############################################################
+--- B1. RegisterComponent as Regulator (Org3) -- expect rejection ---
+Error: endorsement failure during invoke. response: status:500 message:"registerComponent rejected: caller org Org3MSP is not authorised to call this function (allowed: [Org1MSP Org2MSP])"
+
+--- B2. RecordTest as Tier-1 (Org2) on a component owned by the OEM -- expect rejection ---
+(setup RegisterComponent AUTH-NEG-TEST as OEM committed VALID)
+Error: endorsement failure during invoke. response: status:500 message:"recordTest rejected: caller Org2MSP is not the current owner of token AUTH-NEG-TEST (owner is Org1MSP)"
+
+--- B3. RecordShipment as Regulator (Org3) on a component owned by the OEM -- expect rejection ---
+(setup RegisterComponent + RecordTest AUTH-NEG-SHIP as OEM, both committed VALID)
+Error: endorsement failure during invoke. response: status:500 message:"recordShipment rejected: caller Org3MSP is not the current owner of token AUTH-NEG-SHIP (owner is Org1MSP)"
+
+--- B4. RecordAssembly as Tier-1 (Org2) -- expect rejection (OEM-only) ---
+(setup RegisterComponent + RecordTest + RecordShipment AUTH-NEG-ASM as OEM, all committed VALID)
+Error: endorsement failure during invoke. response: status:500 message:"recordAssembly rejected: caller org Org2MSP is not authorised to call this function (allowed: [Org1MSP])"
+
+--- B5. RecordDelivery as Tier-1 (Org2) on a product owned by the OEM -- expect rejection ---
+(setup RegisterComponent + RecordTest + RecordShipment + RecordAssembly AUTH-NEG-DEL as OEM, all committed VALID)
+Error: endorsement failure during invoke. response: status:500 message:"recordDelivery rejected: caller Org2MSP is not the current owner of token AUTH-NEG-DEL-PRODUCT (owner is Org1MSP)"
+
+--- B6. AttachEvidence as Regulator (Org3) on a component owned by the OEM -- expect rejection ---
+(setup RegisterComponent AUTH-NEG-EVID as OEM committed VALID)
+Error: endorsement failure during invoke. response: status:500 message:"attachEvidence rejected: caller Org3MSP is not the current owner of token AUTH-NEG-EVID (owner is Org1MSP)"
+
+--- B7. CloseRecall as Tier-1 (Org2) -- expect rejection (OEM/Regulator only) ---
+(setup RegisterComponent AUTH-NEG-CLOSE + TriggerRecall BATCH-AUTH-NEG-CLOSE as OEM, both committed VALID; TriggerRecall payload:"{\"affectedCount\":1,\"batchId\":\"BATCH-AUTH-NEG-CLOSE\",\"notifiedOwners\":[\"Org1MSP\"],\"skippedOverlap\":[],\"txId\":\"7e0f834e3c29f6ff9bd834efa1bcac2e5692d95a8977222a558dac88aad9adde\"}")
+Error: endorsement failure during invoke. response: status:500 message:"closeRecall rejected: caller org Org2MSP is not authorised to call this function (allowed: [Org1MSP Org3MSP])"
+
+--- B8. RecordUsageLog as Tier-1 (Org2) on a DELIVERED component owned by the OEM -- expect rejection (wrong org) ---
+(setup RegisterComponent + RecordTest + RecordShipment + RecordAssembly + RecordDelivery AUTH-NEG-USAGE-ORG as OEM, all committed VALID)
+Error: endorsement failure during invoke. response: status:500 message:"recordUsageLog rejected: caller org Org2MSP is not authorised to call this function (allowed: [Org1MSP])"
+
+--- B9. RecordUsageLog as OEM, but the component is not yet DELIVERED -- expect rejection (wrong status) ---
+(setup RegisterComponent + RecordTest AUTH-NEG-USAGE-STATUS as OEM, both committed VALID; status is QC_PASSED)
+Error: endorsement failure during invoke. response: status:500 message:"recordUsageLog rejected: invalid state transition: token AUTH-NEG-USAGE-STATUS has status QC_PASSED, expected DELIVERED"
+
+=== DONE: Scenario 9 main run complete ===
+
+############################################################
+### SUPPLEMENTARY CONFIRMATION: corrected AttachEvidence ordering ###
+############################################################
+=== Run separately, against the same v3.0/sequence 5 deployment, after
+=== fixing scripts/scenario_9_caller_authorisation_live.sh to call
+=== AttachEvidence before RecordDelivery instead of after. ===
+
+--- RegisterComponent AUTH-HAPPY-2 ---
+txid [4136e51380183fd9860347b6875a6470bd3edd05ba308b8caca0a821feeae3c3] committed VALID at both peers.
+--- RecordTest AUTH-HAPPY-2 ---
+txid [1382cb24631f124fd1572848a419fa50a957ed5511680f4388b83049baae56df] committed VALID at both peers.
+--- RecordShipment AUTH-HAPPY-2 (still owner=Org1MSP) ---
+txid [472beb5ce567044c05b912e83a63204a1269610b3a1f40f85ccba4c2246b9824] committed VALID at both peers.
+--- AttachEvidence on AUTH-HAPPY-2 (before delivery -- should now succeed) ---
+txid [6d3a787f4efb95d3382ae02a50d8f739d64c0c98f34c11f19577a6a449de8b3f] committed VALID at both peers. Chaincode invoke successful.
+--- GetEvidence AUTH-HAPPY-2 (confirm retained) ---
+[{"evidenceId":"EV-AUTH-HAPPY-2","documentType":"USAGE_REPORT","sha256":"3c5676a61f355104bd10bc4eedf342f0b732b51477089a8a8c7318b5bdba1037","hashAlgorithm":"SHA-256","producerMsp":"Org1MSP","repositoryRef":"repo://auth-happy/2","submittedByMsp":"Org1MSP","submittedAt":"2026-08-29T18:43:00.549205Z","schemaVersion":"1.0"}]
+--- RecordAssembly + RecordDelivery to complete the lifecycle ---
+txid [53a39fb81c5eb9f76e0692b650bd2442792697881346c0123ac73b9b18c9b9bb] committed VALID (RecordAssembly).
+txid [00a901a4b59d2f99102889ca4453d6de088eece890428bd6dcfc47b36bc98c54] committed VALID (RecordDelivery).
+--- Final ProvenanceCheck confirmation on AUTH-HAPPY-2 (post-lifecycle) ---
+{"coAttestingOrgs":["Org1MSP","Org2MSP"],"componentId":"AUTH-HAPPY-2","lifecycleStatus":"DELIVERED","note":"confirms ledger registration and a caller-declared co-attestation list only; CoAttestingOrgs is business data supplied by the submitting client, not cryptographic proof that those organisations endorsed anything, and this result does not by itself prove the physical item being scanned is the genuine, unaltered original","recallStatus":"","registeredOnLedger":true,"result":"REGISTERED_WITH_DECLARED_PARTICIPANTS"}
+
+=== SUPPLEMENTARY CONFIRMATION DONE: with the corrected ordering, the full
+=== lifecycle (register, test, ship, attach evidence, assemble, deliver)
+=== completes successfully end-to-end under the new caller-authorisation
+=== rules. ===

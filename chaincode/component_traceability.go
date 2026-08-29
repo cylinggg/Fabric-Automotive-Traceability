@@ -46,6 +46,24 @@ import (
 //	    registered, two typed evidence references attached and both
 //	    retained by GetEvidence, and both negative cases (duplicate
 //	    evidence ID, malformed digest) rejected as designed.
+//	3.0 (sequence 5): caller authorisation hardened in response to
+//	    supervisor review. RegisterComponent, RecordTest, RecordShipment,
+//	    RecordAssembly, RecordDelivery, AttachEvidence, CloseRecall, and
+//	    RecordUsageLog previously checked only caller-supplied business
+//	    data (a declared fromOwner string, a declared supplierID,
+//	    CoAttestingOrgs) and never the caller's own authenticated MSP
+//	    identity, so an enrolled but unrelated participant could act on a
+//	    token it did not hold. requireCallerIsOwner and requireCallerIs now
+//	    compare against ctx.GetClientIdentity().GetMSPID() directly.
+//	    RecordUsageLog also gained the DELIVERED status check the
+//	    dissertation already claimed but the code did not enforce.
+//	    ProvenanceCheck's REGISTERED_WITH_SUFFICIENT_ATTESTATION result was
+//	    renamed to REGISTERED_WITH_DECLARED_PARTICIPANTS, since
+//	    CoAttestingOrgs is caller-supplied and not cryptographic evidence of
+//	    endorsement. Unit-tested (27 cases, including 11 new
+//	    caller-authorisation negative tests) and exercised live on the same
+//	    three-organisation network (evidence/real_fabric_run6_caller_authorisation.log;
+//	    Scenario 9).
 type SmartContract struct {
 	contractapi.Contract
 }
@@ -127,6 +145,7 @@ type ComponentToken struct {
 const (
 	minCoAttestingOrgs  = 2
 	oemOrgMSP           = "Org1MSP" // generic OEM org; map to your real MSP identifier at deployment (see README)
+	tier1OrgMSP         = "Org2MSP" // generic Tier-1 supplier org; the only supplier-side org actually deployed on the evaluated test network (see README / Limitations)
 	regulatorOrgMSP     = "Org3MSP" // requires a third network organisation; see Limitations
 	batchComponentIndex = "batch~component"
 )
@@ -159,6 +178,54 @@ func recordCoAttestation(ctx contractapi.TransactionContextInterface, declaredOr
 	return callerMSP, out, nil
 }
 
+// requireCallerIsOwner enforces that the transaction's authenticated MSP
+// identity, not any caller-supplied business string, matches the token's
+// current custodian before a custody-changing or custody-scoped operation
+// proceeds.
+//
+// This exists to close a caller-authorisation gap identified in supervisor
+// review: several functions previously checked only a caller-supplied claim
+// against the token (e.g. RecordShipment's now-removed fromOwner check,
+// which compared token.Owner to a string the caller itself typed in) and
+// never verified that the caller's own cryptographically authenticated
+// identity actually matched. Under that design, any enrolled participant
+// who merely knew or guessed the current owner value could act on a token
+// they did not hold, because the check never touched
+// ctx.GetClientIdentity() at all. Comparing against callerMSP here instead
+// ties the decision to the same MSP identity Fabric itself authenticates
+// for every transaction, which cannot be forged by the caller the way a
+// plain string argument can.
+func requireCallerIsOwner(ctx contractapi.TransactionContextInterface, token *ComponentToken) error {
+	callerMSP, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return fmt.Errorf("failed to get caller MSP: %v", err)
+	}
+	if callerMSP != token.Owner {
+		return fmt.Errorf("caller %s is not the current owner of token %s (owner is %s)", callerMSP, token.TokenID, token.Owner)
+	}
+	return nil
+}
+
+// requireCallerIs enforces that the transaction's authenticated MSP identity
+// is one of the given allowed organisations, returning that identity on
+// success. Used for functions restricted to a role rather than to a token's
+// current owner (e.g. only the OEM may assemble products; only the OEM or
+// Regulator may resolve a recall). Every caller of this helper passes the
+// error straight back to the client without proceeding, so a rejected
+// caller's identity is never silently accepted for a partial effect.
+func requireCallerIs(ctx contractapi.TransactionContextInterface, allowed ...string) (string, error) {
+	callerMSP, err := ctx.GetClientIdentity().GetMSPID()
+	if err != nil {
+		return "", fmt.Errorf("failed to get caller MSP: %v", err)
+	}
+	for _, a := range allowed {
+		if callerMSP == a {
+			return callerMSP, nil
+		}
+	}
+	return "", fmt.Errorf("caller org %s is not authorised to call this function (allowed: %v)", callerMSP, allowed)
+}
+
 // txTimestamp returns the transaction's Fabric-assigned timestamp rather
 // than the executing peer's local clock. time.Now() would read a different
 // wall-clock value on every peer that (re-)executes this chaincode during
@@ -178,11 +245,20 @@ func txTimestamp(ctx contractapi.TransactionContextInterface) (time.Time, error)
 //
 //	CHECK:  GetState(componentID) == nil (reject if already registered)
 //	CREATE TOKEN -> PutState -> maintain batch~component index -> EMIT ComponentRegistered
+// supplierID is accepted for interface/script compatibility and audit-trail
+// readability only. It is a caller-supplied label, not independently
+// verified, so it is never used to decide the token's owner: the owner is
+// always the caller's own authenticated MSP identity (see
+// requireCallerIsOwner). Only the OEM or the (one, deployed) Tier-1
+// supplier org may register a new component; the Regulator may not.
 func (s *SmartContract) RegisterComponent(ctx contractapi.TransactionContextInterface,
 	componentID string, batchID string, supplierID string, testReportHash string, coAttestingOrgsCSV string) error {
 
 	if componentID == "" || batchID == "" {
 		return fmt.Errorf("registerComponent rejected: componentID and batchID are required")
+	}
+	if _, err := requireCallerIs(ctx, oemOrgMSP, tier1OrgMSP); err != nil {
+		return fmt.Errorf("registerComponent rejected: %v", err)
 	}
 	if err := requireHashLike(testReportHash); err != nil {
 		return fmt.Errorf("registerComponent rejected: %v", err)
@@ -213,7 +289,7 @@ func (s *SmartContract) RegisterComponent(ctx contractapi.TransactionContextInte
 		TokenID:          componentID,
 		BatchID:          batchID,
 		Status:           "MANUFACTURED",
-		Owner:            supplierID,
+		Owner:            callerMSP, // authenticated identity, not the caller-supplied supplierID
 		DataHash:         testReportHash,
 		SubmittingOrgMSP: callerMSP,
 		CoAttestingOrgs:  coAttestors,
@@ -242,6 +318,9 @@ func (s *SmartContract) RecordTest(ctx contractapi.TransactionContextInterface, 
 	}
 	if err := requireNotRecalled(token); err != nil {
 		return err
+	}
+	if err := requireCallerIsOwner(ctx, token); err != nil {
+		return fmt.Errorf("recordTest rejected: %v", err)
 	}
 	if err := requireHashLike(testReportHash); err != nil {
 		return fmt.Errorf("recordTest rejected: %v", err)
@@ -280,6 +359,9 @@ func (s *SmartContract) AttachEvidence(ctx contractapi.TransactionContextInterfa
 			return fmt.Errorf("attachEvidence rejected: evidence %s already exists on token %s", evidenceID, tokenID)
 		}
 	}
+	if err := requireCallerIsOwner(ctx, token); err != nil {
+		return fmt.Errorf("attachEvidence rejected: %v", err)
+	}
 	callerMSP, coAttestors, err := recordCoAttestation(ctx, splitCSV(coAttestingOrgsCSV))
 	if err != nil {
 		return err
@@ -314,6 +396,21 @@ func (s *SmartContract) GetEvidence(ctx contractapi.TransactionContextInterface,
 
 // RecordShipment transfers custody to the next organisation in the chain.
 // Requires the component to currently be QC_PASSED.
+//
+// fromOwner is retained for interface/script compatibility and audit-trail
+// readability only; it used to be compared directly against token.Owner as
+// the sole authorisation check, which meant any enrolled caller who simply
+// knew or guessed the right string, not necessarily the actual owner, could
+// ship someone else's component. That check has been removed in favour of
+// requireCallerIsOwner, which instead compares the caller's own
+// cryptographically authenticated MSP identity to the token's current
+// owner. fromOwner is no longer used to decide anything.
+//
+// toOrg becomes the new Owner as a caller-supplied destination declaration;
+// this authenticates the sender's authority to release custody, not an
+// acceptance signature from the receiving organisation. Requiring the
+// receiver to also endorse the transfer is a natural extension left for
+// future work (Limitations).
 func (s *SmartContract) RecordShipment(ctx contractapi.TransactionContextInterface, componentID string, fromOwner string, toOrg string, coAttestingOrgsCSV string) error {
 	token, err := s.mustGetToken(ctx, componentID)
 	if err != nil {
@@ -325,8 +422,8 @@ func (s *SmartContract) RecordShipment(ctx contractapi.TransactionContextInterfa
 	if err := requireNotRecalled(token); err != nil {
 		return err
 	}
-	if err := requireOwner(token, fromOwner); err != nil {
-		return err
+	if err := requireCallerIsOwner(ctx, token); err != nil {
+		return fmt.Errorf("recordShipment rejected: %v", err)
 	}
 	callerMSP, coAttestors, err := recordCoAttestation(ctx, splitCSV(coAttestingOrgsCSV))
 	if err != nil {
@@ -362,6 +459,9 @@ func (s *SmartContract) RecordShipment(ctx contractapi.TransactionContextInterfa
 func (s *SmartContract) RecordAssembly(ctx contractapi.TransactionContextInterface, productID string, componentIDsCSV string, recipeID string, coAttestingOrgsCSV string) error {
 	if productID == "" {
 		return fmt.Errorf("recordAssembly rejected: productID is required")
+	}
+	if _, err := requireCallerIs(ctx, oemOrgMSP); err != nil {
+		return fmt.Errorf("recordAssembly rejected: %v", err)
 	}
 	existingProduct, err := ctx.GetStub().GetState(productID)
 	if err != nil {
@@ -468,6 +568,9 @@ func (s *SmartContract) RecordDelivery(ctx contractapi.TransactionContextInterfa
 	if err := requireNotRecalled(token); err != nil {
 		return err
 	}
+	if err := requireCallerIsOwner(ctx, token); err != nil {
+		return fmt.Errorf("recordDelivery rejected: %v", err)
+	}
 	callerMSP, coAttestors, err := recordCoAttestation(ctx, splitCSV(coAttestingOrgsCSV))
 	if err != nil {
 		return err
@@ -507,14 +610,35 @@ func (s *SmartContract) RecordDelivery(ctx contractapi.TransactionContextInterfa
 
 // RecordUsageLog stores field telemetry used by the warranty-dispute
 // scenario. Requires the component to have been delivered (there is no
-// meaningful "usage" before a customer has the product).
+// meaningful "usage" before a customer has the product); an earlier version
+// of this function checked only requireNotRecalled and silently accepted
+// usage data for a component still sitting at MANUFACTURED/QC_PASSED/
+// SHIPPED/ASSEMBLED, contradicting the dissertation's own stated design.
+// That gap is fixed below by requiring Status == DELIVERED explicitly.
+//
+// Caller authorisation is restricted to the OEM. The real post-delivery
+// custodian is a dealer or service centre, but this evaluated network
+// deploys only three organisations (OEM, Tier-1 supplier, Regulator; see
+// README / Limitations) and has no separate dealer MSP to authenticate
+// against, so RecordUsageLog cannot use requireCallerIsOwner the way the
+// other lifecycle functions do (token.Owner after delivery is a
+// caller-supplied dealer label, not a channel identity). The OEM is used
+// here as the verified relay for field telemetry in this simplified model;
+// a production design would add a dealer/service organisation and
+// authenticate it directly instead.
 func (s *SmartContract) RecordUsageLog(ctx contractapi.TransactionContextInterface, componentID string, avgTempC float64, coAttestingOrgsCSV string) error {
 	token, err := s.mustGetToken(ctx, componentID)
 	if err != nil {
 		return err
 	}
+	if err := requireStatus(token, "DELIVERED"); err != nil {
+		return fmt.Errorf("recordUsageLog rejected: %v", err)
+	}
 	if err := requireNotRecalled(token); err != nil {
 		return err
+	}
+	if _, err := requireCallerIs(ctx, oemOrgMSP); err != nil {
+		return fmt.Errorf("recordUsageLog rejected: %v", err)
 	}
 	callerMSP, coAttestors, err := recordCoAttestation(ctx, splitCSV(coAttestingOrgsCSV))
 	if err != nil {
@@ -586,10 +710,10 @@ func (s *SmartContract) ProvenanceCheck(ctx contractapi.TransactionContextInterf
 	if err := json.Unmarshal(bytes, &token); err != nil {
 		return "", err
 	}
-	sufficientlyAttested := len(token.CoAttestingOrgs) >= minCoAttestingOrgs
+	hasDeclaredParticipants := len(token.CoAttestingOrgs) >= minCoAttestingOrgs
 	result := "SUSPECT"
-	if sufficientlyAttested {
-		result = "REGISTERED_WITH_SUFFICIENT_ATTESTATION"
+	if hasDeclaredParticipants {
+		result = "REGISTERED_WITH_DECLARED_PARTICIPANTS"
 	}
 	out, _ := json.Marshal(map[string]interface{}{
 		"componentId":        componentID,
@@ -598,7 +722,7 @@ func (s *SmartContract) ProvenanceCheck(ctx contractapi.TransactionContextInterf
 		"coAttestingOrgs":    token.CoAttestingOrgs,
 		"lifecycleStatus":    token.Status,
 		"recallStatus":       token.RecallStatus,
-		"note":               "confirms ledger registration and declared co-attestation only; does not by itself prove the physical item being scanned is the genuine, unaltered original",
+		"note":               "confirms ledger registration and a caller-declared co-attestation list only; CoAttestingOrgs is business data supplied by the submitting client, not cryptographic proof that those organisations endorsed anything, and this result does not by itself prove the physical item being scanned is the genuine, unaltered original",
 	})
 	return string(out), nil
 }
@@ -722,6 +846,11 @@ func (s *SmartContract) TriggerRecall(ctx contractapi.TransactionContextInterfac
 // for it. The original recall Reason is also left untouched; the resolution
 // is appended to ReasonHistory so the full timeline stays on the ledger
 // instead of being overwritten.
+//
+// Restricted to OEM or Regulator, matching ReviseRecallReason and
+// RevokeRecall: an earlier version had no caller-role check at all, so any
+// enrolled participant, including one with no relationship to the recalled
+// token, could resolve a safety recall.
 func (s *SmartContract) CloseRecall(ctx contractapi.TransactionContextInterface, componentID string, resolution string, note string, coAttestingOrgsCSV string) (string, error) {
 	token, err := s.mustGetToken(ctx, componentID)
 	if err != nil {
@@ -729,6 +858,9 @@ func (s *SmartContract) CloseRecall(ctx contractapi.TransactionContextInterface,
 	}
 	if token.RecallStatus != "RECALLED" {
 		return "", fmt.Errorf("closeRecall rejected: token %s is not currently RECALLED (recall status %q)", componentID, token.RecallStatus)
+	}
+	if _, err := requireCallerIs(ctx, oemOrgMSP, regulatorOrgMSP); err != nil {
+		return "", fmt.Errorf("closeRecall rejected: %v", err)
 	}
 	callerMSP, coAttestors, err := recordCoAttestation(ctx, splitCSV(coAttestingOrgsCSV))
 	if err != nil {
@@ -913,13 +1045,6 @@ func (s *SmartContract) GetComponent(ctx contractapi.TransactionContextInterface
 func requireStatus(token *ComponentToken, expected string) error {
 	if token.Status != expected {
 		return fmt.Errorf("invalid state transition: token %s has status %s, expected %s", token.TokenID, token.Status, expected)
-	}
-	return nil
-}
-
-func requireOwner(token *ComponentToken, expectedOwner string) error {
-	if expectedOwner != "" && token.Owner != expectedOwner {
-		return fmt.Errorf("invalid caller: token %s is owned by %s, not %s", token.TokenID, token.Owner, expectedOwner)
 	}
 	return nil
 }
