@@ -24,21 +24,34 @@ retained by `GetEvidence`, and both negative cases (duplicate evidence ID,
 malformed digest) rejected as designed.
 
 Following supervisor review, caller authorisation was hardened and
-deployed as version 3.0, sequence 5, tagged `v3.0-submission` (the final
-submission tag): `RegisterComponent`, `RecordTest`, `RecordShipment`,
-`RecordAssembly`, `RecordDelivery`, `AttachEvidence`, `CloseRecall`, and
-`RecordUsageLog` now check the caller's authenticated MSP identity
-(`requireCallerIsOwner`/`requireCallerIs`) instead of caller-supplied
-business data, and `RecordUsageLog` enforces the `DELIVERED` status the
-dissertation already claimed but the code did not. Exercised live
-(`evidence/real_fabric_run6_caller_authorisation.log`): a full authorised
-path across every affected function, one genuine rejection per function
-from an enrolled but unauthorised organisation, and a real discovered
-limitation (`AttachEvidence` cannot follow `RecordDelivery`, since the
-post-delivery dealer owner is not a real MSP on this network). `v2.0-` and
-`v2.1-submission` are earlier, superseded tags kept for history. See the
-chaincode's top-of-file comments and the evidence log filenames below for
-the exact evidence boundary.
+deployed as version 3.0, sequence 5: `RegisterComponent`, `RecordTest`,
+`RecordShipment`, `RecordAssembly`, `RecordDelivery`, `AttachEvidence`,
+`CloseRecall`, and `RecordUsageLog` now check the caller's authenticated
+MSP identity (`requireCallerIsOwner`/`requireCallerIs`) instead of
+caller-supplied business data, and `RecordUsageLog` enforces the
+`DELIVERED` status the dissertation already claimed but the code did not.
+Exercised live (`evidence/real_fabric_run6_caller_authorisation.log`): a
+full authorised path across every affected function, one genuine
+rejection per function from an enrolled but unauthorised organisation,
+and a real discovered limitation (`AttachEvidence` cannot follow
+`RecordDelivery`, since the post-delivery dealer owner is not a real MSP
+on this network).
+
+Proactively, ahead of further review, three residual gaps were then
+closed and deployed as version 3.1, sequence 6, tagged `v3.1-submission`
+(the final submission tag): `RecordShipment`'s `toOrg` (the new owner) is
+now validated against the network's known organisations, so a mistyped
+or fabricated destination can no longer permanently orphan a token;
+`RecordAssembly` now checks that the OEM actually holds each listed
+component, not only that the caller has the OEM role; and declared
+`CoAttestingOrgs` names are rejected if they do not name a real, deployed
+organisation. Exercised live
+(`evidence/real_fabric_run7_proactive_hardening.log`): a full authorised
+path unaffected by the new checks, plus one genuine rejection per new
+check. `v2.0-`, `v2.1-`, `v2.2-`, and `v3.0-submission` are earlier,
+superseded tags kept for history. See the chaincode's top-of-file
+comments and the evidence log filenames below for the exact evidence
+boundary.
 
 ## What is actually in this repo
 
@@ -272,7 +285,12 @@ dissertation's Section 5 for why they should not be conflated. As of
 v3.0/sequence 5, caller authorisation is enforced by comparing the
 caller's authenticated MSP identity (`ctx.GetClientIdentity().GetMSPID()`)
 to the token's current owner or a fixed role list, not by trusting a
-caller-supplied string.
+caller-supplied string. As of v3.1/sequence 6, every function below that
+declares co-attesting orgs also rejects any declared name that is not one
+of this network's three deployed organisations (`recordCoAttestation`),
+`RecordShipment`'s destination organisation is validated the same way,
+and `RecordAssembly` checks that the OEM actually holds each listed
+component, not only that the caller has the OEM role.
 
 | Function | Peer endorsement | Caller authorisation | Business precondition | Purpose |
 |---|---|---|---|---|
@@ -280,9 +298,9 @@ caller-supplied string.
 | `RecordTest` | Implicit majority | Current owner (MSP) only | ≥2 co-attesting orgs declared; status `MANUFACTURED`; not currently RECALLED | Commit client-hashed QC test-report digest; status → `QC_PASSED` |
 | `AttachEvidence` | Implicit majority | Current owner (MSP) only | ≥2 co-attesting orgs declared; evidence ID must be unique within the token | Append typed metadata and a client-computed SHA-256 digest for an externally stored document; document bytes never enter Fabric; must run before `RecordDelivery` (see Limitations below) |
 | `GetEvidence` | N/A (query) | None | None | Return evidence references and verification metadata; actual document retrieval remains off-chain |
-| `RecordShipment` | Implicit majority | Current owner (MSP) only | ≥2 co-attesting orgs declared; status `QC_PASSED`; not currently RECALLED | Transfer custody; status → `SHIPPED`; the `fromOwner` argument is retained only for audit-trail readability and no longer checked |
-| `RecordAssembly` | Implicit majority | OEM org only | ≥2 co-attesting orgs declared; every listed component `SHIPPED` and not currently RECALLED (may span multiple batches) | Combine components into a product token, recording every distinct constituent batch in `componentBatches`; status → `ASSEMBLED` |
-| `RecordDelivery` | Implicit majority | Current owner (MSP) only | ≥2 co-attesting orgs declared; status `ASSEMBLED`; not currently RECALLED | Final transfer to dealer; status → `DELIVERED`; cascades to every component |
+| `RecordShipment` | Implicit majority | Current owner (MSP) only | ≥2 co-attesting orgs declared; `toOrg` must be a known network org; status `QC_PASSED`; not currently RECALLED | Transfer custody; status → `SHIPPED`; the `fromOwner` argument is retained only for audit-trail readability and no longer checked |
+| `RecordAssembly` | Implicit majority | OEM org only, and OEM must currently own every listed component | ≥2 co-attesting orgs declared; every listed component `SHIPPED` and not currently RECALLED (may span multiple batches) | Combine components into a product token, recording every distinct constituent batch in `componentBatches`; status → `ASSEMBLED` |
+| `RecordDelivery` | Implicit majority | Current owner (MSP) only | ≥2 co-attesting orgs declared; `dealerID` non-empty; status `ASSEMBLED`; not currently RECALLED | Final transfer to dealer; status → `DELIVERED`; cascades to every component |
 | `RecordUsageLog` | Implicit majority | OEM org only | ≥2 co-attesting orgs declared; status `DELIVERED`; not currently RECALLED | Attach field telemetry to a token; OEM stands in for the (undeployed) dealer/service-centre identity on this 3-org network |
 | `WarrantyCheck` | N/A (query) | None | None | Apply a threshold rule to usage data |
 | `ProvenanceCheck` (formerly `CounterfeitScan`) | N/A (query) | None | None | Verify ledger registration + declared co-attestation count (`REGISTERED_WITH_DECLARED_PARTICIPANTS`, not physical authenticity — renamed from `REGISTERED_WITH_SUFFICIENT_ATTESTATION` in v3.0) |
@@ -290,7 +308,7 @@ caller-supplied string.
 | `CloseRecall` | Implicit majority | OEM or Regulator org only | ≥2 co-attesting orgs declared; `recallStatus` = `RECALLED` | Resolve a recalled token's `recallStatus` to `REPAIRED`/`REPLACED`/`RETIRED`; lifecycle `status` is left untouched |
 | `ReviseRecallReason` | Implicit majority | OEM or Regulator org only | Token's `recallBatchId` must match the named batch | Append an amendment to a batch's recall reason, restricted to tokens whose `recallBatchId` matches that batch, without overwriting it |
 | `RevokeRecall` | Implicit majority | Regulator org only | Token's `recallBatchId` must match the named batch | Clear `recallStatus`/`recallBatchId` back to empty for tokens whose `recallBatchId` matches the named batch only, restoring visibility of whatever lifecycle `status` the token actually had; a token still recalled under a *different* batch is left untouched (v2.1 fix — v2.0 could incorrectly clear it) |
-| `GetHistory` | Read-only | Full on-chain version history of a token (`GetHistoryForKey`) |
+| `GetHistory` | N/A (query) | None | None | Return the full on-chain version history of a token via `GetHistoryForKey` |
 
 Every write function above that operates on an existing token also rejects
 the call outright if that token's `recallStatus` is currently `RECALLED`
