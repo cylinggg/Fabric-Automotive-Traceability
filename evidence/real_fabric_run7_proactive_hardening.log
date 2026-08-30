@@ -1,0 +1,74 @@
+=== Scenario 10 (FABRIC TEST-NETWORK): proactive caller-authorisation
+=== hardening, version 3.1, sequence 6. Produced by
+=== scripts/scenario_10_proactive_hardening_live.sh against the same
+=== three-organisation Fabric test-network used throughout this
+=== dissertation. Unedited console output below (ANSI colour codes
+=== stripped only).
+===
+=== This version closes three residual gaps identified proactively,
+=== anticipating further supervisor review rather than waiting for it:
+=== (1) RecordShipment's toOrg (the new Owner) was never validated, so a
+=== mistyped or fabricated destination could permanently orphan a token;
+=== (2) RecordAssembly checked only that the caller *was* the OEM, never
+=== that the OEM actually *held* each listed component; (3) declared
+=== CoAttestingOrgs names were accepted verbatim with no check that they
+=== named a real, deployed organisation.
+
+=== 1-5. Package, install, approve, and commit v3.1/sequence 6 ===
+Package ID: component-traceability_3.1:fc852c34d2e72cd0c7882d9f40d0b7e0bc6bfb7f80dfcf166f8c0b18d826a0bb
+(3x successful install responses, one per organisation, omitted for brevity)
+Approvals: 3x txid committed VALID (Org1MSP, Org2MSP, Org3MSP)
+checkcommitreadiness: {"approvals": {"Org1MSP": true, "Org2MSP": true, "Org3MSP": true}}
+Commit: txid [2801f42da93101e5c58f017516d33dd7176d6006232b8220b80cfc79104bb017] committed VALID at all three peers
+querycommitted: Version: 3.1, Sequence: 6, Approvals: [Org1MSP: true, Org2MSP: true, Org3MSP: true]
+
+############################################################
+### PART A: authorised happy path unaffected by the new checks ###
+############################################################
+--- RegisterComponent AUTH2-HAPPY-1 (known co-attestor Org2MSP) ---
+txid [830e8719734524f1a4acb8739994d2e28dbc19fc85666463ba369f380c747f4a] committed VALID at both peers.
+--- RecordTest ---
+txid [ec35bf27f15d7123fc89c446dbdefe83716e67deadeb1c0fd08fadc991434dd4] committed VALID at both peers.
+--- RecordShipment to a known org (Org1MSP) ---
+txid [6a05fbb859fef5748dd2ed85d06f20c9dc71a9e38460e685129bafab51d50497] committed VALID at both peers.
+--- AttachEvidence before delivery ---
+txid [c41b7e9606194bb31306fd953256ad3936d889b405ada9f878521adfa97c17f9] committed VALID at both peers.
+--- RecordAssembly (OEM genuinely owns the component) ---
+txid [03202a7fbdb584e06db22f3480b2bf657d68599526a2439c4e4283a304a8ed78] committed VALID at both peers.
+--- RecordDelivery with a real dealerID ---
+txid [1b9a18666dda26750a4ce3bf5abc66957844e438e9803c40b55d1fb1cb4e5e79] committed VALID at both peers.
+--- RecordUsageLog (OEM, now DELIVERED) ---
+txid [f63562f3e6df65b9b397255c46656cfa3242c20c5262fc185da29227ee8d14af] committed VALID at both peers.
+
+All six calls in the authorised path committed VALID: the three new
+checks (destination-org validation, per-component ownership in
+RecordAssembly, non-empty dealerID) do not interfere with legitimate
+use.
+
+############################################################
+### PART B: negative cases for the new proactive checks ###
+############################################################
+--- B1. RecordShipment to an unknown destination org -- expect rejection ---
+(setup RegisterComponent + RecordTest AUTH2-NEG-SHIP as OEM, both committed VALID)
+Error: endorsement failure during invoke. response: status:500 message:"recordShipment rejected: toOrg \"NotARealOrg\" is not a known organisation on this network"
+
+--- B2. RecordAssembly on a component shipped laterally to Tier-1, not the OEM -- expect rejection ---
+(setup RegisterComponent + RecordTest AUTH2-NEG-ASM as OEM, then RecordShipment to Org2MSP -- a legitimate lateral shipment to Tier-1, not the OEM -- all committed VALID)
+Error: endorsement failure during invoke. response: status:500 message:"recordAssembly rejected for component AUTH2-NEG-ASM: caller Org1MSP is not the current owner of token AUTH2-NEG-ASM (owner is Org2MSP)"
+
+This is the exact scenario the fix targets: the OEM has the correct
+*role* to call RecordAssembly (requireCallerIs passes), but does not
+*hold* this specific component -- Tier-1 does, following a genuine
+lateral shipment. The per-component requireCallerIsOwner check catches
+what the role check alone could not.
+
+--- B3. RecordDelivery with an empty dealerID -- expect rejection ---
+(setup RegisterComponent + RecordTest + RecordShipment + RecordAssembly AUTH2-NEG-DEL as OEM, all committed VALID)
+Error: endorsement failure during invoke. response: status:500 message:"recordDelivery rejected: dealerID is required"
+
+--- B4. RegisterComponent declaring a fabricated co-attesting org -- expect rejection ---
+Error: endorsement failure during invoke. response: status:500 message:"declared co-attesting org \"FakeOrgXYZ\" is not a known organisation on this network"
+
+=== DONE: Scenario 10 complete. All four proactive checks reject the
+=== exact failure mode they were designed for, on the real network, with
+=== no impact on the authorised path. ===
