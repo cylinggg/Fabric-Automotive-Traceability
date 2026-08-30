@@ -850,6 +850,99 @@ func TestRecordUsageLog_SucceedsForOEMOnDeliveredComponent(t *testing.T) {
 	}
 }
 
+// --- proactive hardening beyond the specific gaps supervisor review named:
+// unvalidated destination/business-data fields that could either orphan a
+// token or let a correctly-authorised caller act on a component it does not
+// actually hold ---
+
+func TestRecordShipment_RejectsUnknownDestinationOrg(t *testing.T) {
+	s := &SmartContract{}
+	stub := newFakeStub("tx1")
+	ctx := &fakeCtx{stub: stub, callerID: oemOrgMSP}
+
+	if err := s.RegisterComponent(ctx, "COMP-HARD1", "BATCH-HARD", "Tier2Supplier", reportHash("r"), "Org2MSP"); err != nil {
+		t.Fatalf("setup registration failed: %v", err)
+	}
+	if err := s.RecordTest(ctx, "COMP-HARD1", reportHash("t"), "Org2MSP"); err != nil {
+		t.Fatalf("setup RecordTest failed: %v", err)
+	}
+	// "NotARealOrg" is not one of the three organisations deployed on this
+	// network; accepting it would orphan the token (no future caller could
+	// ever satisfy requireCallerIsOwner again).
+	err := s.RecordShipment(ctx, "COMP-HARD1", oemOrgMSP, "NotARealOrg", "Org2MSP")
+	if err == nil {
+		t.Fatalf("RecordShipment to an unknown destination org should be rejected, got nil error")
+	}
+	if !strings.Contains(err.Error(), "not a known organisation") {
+		t.Fatalf("expected a known-organisation error, got: %v", err)
+	}
+}
+
+func TestRecordAssembly_RejectsComponentNotOwnedByCaller(t *testing.T) {
+	s := &SmartContract{}
+	stub := newFakeStub("tx1")
+	oemCtx := &fakeCtx{stub: stub, callerID: oemOrgMSP}
+
+	// Register and test as OEM, then ship LATERALLY to Tier-1 rather than to
+	// the OEM. The component is now genuinely owned by Tier-1.
+	if err := s.RegisterComponent(oemCtx, "COMP-HARD2", "BATCH-HARD", "Tier2Supplier", reportHash("r"), "Org2MSP"); err != nil {
+		t.Fatalf("setup registration failed: %v", err)
+	}
+	if err := s.RecordTest(oemCtx, "COMP-HARD2", reportHash("t"), "Org2MSP"); err != nil {
+		t.Fatalf("setup RecordTest failed: %v", err)
+	}
+	if err := s.RecordShipment(oemCtx, "COMP-HARD2", oemOrgMSP, tier1OrgMSP, "Org2MSP"); err != nil {
+		t.Fatalf("setup RecordShipment failed: %v", err)
+	}
+	// The OEM is allowed to call RecordAssembly (requireCallerIs passes),
+	// but it does not actually hold this specific component -- Tier-1 does
+	// (Tier-1 itself cannot assemble either, since RecordAssembly is
+	// OEM-only). Without a per-component ownership check, this call would
+	// incorrectly succeed purely because the caller has the right role.
+	err := s.RecordAssembly(oemCtx, "PRODUCT-HARD2", "COMP-HARD2", "RECIPE-HARD2", "Org2MSP")
+	if err == nil {
+		t.Fatalf("RecordAssembly on a component the OEM does not own should be rejected, got nil error")
+	}
+	if !strings.Contains(err.Error(), "is not the current owner") {
+		t.Fatalf("expected an ownership authorisation error, got: %v", err)
+	}
+}
+
+func TestRecordDelivery_RejectsEmptyDealerID(t *testing.T) {
+	s := &SmartContract{}
+	stub := newFakeStub("tx1")
+	ctx := &fakeCtx{stub: stub, callerID: oemOrgMSP}
+
+	shipComponent(t, s, ctx, "COMP-HARD3", "BATCH-HARD3")
+	if err := s.RecordAssembly(ctx, "PRODUCT-HARD3", "COMP-HARD3", "RECIPE-HARD3", "Org2MSP"); err != nil {
+		t.Fatalf("setup RecordAssembly failed: %v", err)
+	}
+	err := s.RecordDelivery(ctx, "PRODUCT-HARD3", "", "Org2MSP")
+	if err == nil {
+		t.Fatalf("RecordDelivery with an empty dealerID should be rejected, got nil error")
+	}
+	if !strings.Contains(err.Error(), "dealerID is required") {
+		t.Fatalf("expected a dealerID-required error, got: %v", err)
+	}
+}
+
+func TestRegisterComponent_RejectsUnknownCoAttestingOrg(t *testing.T) {
+	s := &SmartContract{}
+	stub := newFakeStub("tx1")
+	ctx := &fakeCtx{stub: stub, callerID: oemOrgMSP}
+
+	// "FakeOrgXYZ" is not deployed on this network. Accepting it as a
+	// declared co-attestor would let a caller record a fabricated
+	// organisation name as if it were a real participant.
+	err := s.RegisterComponent(ctx, "COMP-HARD4", "BATCH-HARD4", "Tier2Supplier", reportHash("r"), "FakeOrgXYZ")
+	if err == nil {
+		t.Fatalf("registration declaring an unknown co-attesting org should be rejected, got nil error")
+	}
+	if !strings.Contains(err.Error(), "not a known organisation") {
+		t.Fatalf("expected a known-organisation error, got: %v", err)
+	}
+}
+
 func TestReviseRecallReason_DoesNotAmendTokenOwnedByDifferentBatch(t *testing.T) {
 	s := &SmartContract{}
 	stub := newFakeStub("tx1")

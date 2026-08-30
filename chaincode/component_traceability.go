@@ -64,6 +64,25 @@ import (
 //	    caller-authorisation negative tests) and exercised live on the same
 //	    three-organisation network (evidence/real_fabric_run6_caller_authorisation.log;
 //	    Scenario 9).
+//	3.1 (sequence 6): proactive hardening of the same caller-authorisation
+//	    layer, anticipating further review rather than waiting for it.
+//	    Closes three residual gaps the v3.0 fix did not: (1) RecordShipment
+//	    accepted any toOrg string as the new Owner, so a mistyped or
+//	    fabricated destination could permanently orphan a token (no future
+//	    caller could ever satisfy requireCallerIsOwner again) -- toOrg must
+//	    now be one of the network's known MSPs; (2) RecordAssembly checked
+//	    only that the caller *was* the OEM, never that the OEM actually
+//	    *held* each listed component, so a component shipped laterally to
+//	    Tier-1 could still be assembled by the OEM purely on role, not
+//	    possession -- a per-component requireCallerIsOwner check was added;
+//	    (3) declared CoAttestingOrgs names were accepted verbatim with no
+//	    check that they named a real, deployed organisation, so a typo'd or
+//	    fabricated org could be recorded as if it were a genuine
+//	    participant -- recordCoAttestation now rejects any declared name
+//	    outside the known three-organisation set. RecordDelivery also
+//	    gained a plain non-empty check on dealerID. Unit-tested (31 cases,
+//	    4 new) and exercised live on the same three-organisation network
+//	    (evidence/real_fabric_run7_proactive_hardening.log; Scenario 10).
 type SmartContract struct {
 	contractapi.Contract
 }
@@ -150,6 +169,25 @@ const (
 	batchComponentIndex = "batch~component"
 )
 
+// knownOrgMSPs lists every MSP actually deployed on this evaluated network.
+// Used to reject nonsense or mistyped organisation names wherever a caller
+// supplies one as business data (a declared co-attestor, a shipment
+// destination), rather than silently accepting and recording it. This does
+// not make CoAttestingOrgs cryptographic evidence of endorsement -- a
+// caller can still name a real organisation that never reviewed the
+// record -- it only stops a typo'd or fabricated name from being accepted
+// as if it were a real one.
+var knownOrgMSPs = []string{oemOrgMSP, tier1OrgMSP, regulatorOrgMSP}
+
+func isKnownOrgMSP(msp string) bool {
+	for _, o := range knownOrgMSPs {
+		if msp == o {
+			return true
+		}
+	}
+	return false
+}
+
 // recordCoAttestation returns the sorted, de-duplicated set of the caller's
 // own MSP (cryptographically known) plus any additional orgs the caller
 // declares. Sorting makes the resulting slice byte-identical across every
@@ -166,9 +204,13 @@ func recordCoAttestation(ctx contractapi.TransactionContextInterface, declaredOr
 	}
 	set := map[string]bool{callerMSP: true}
 	for _, o := range declaredOrgs {
-		if o != "" {
-			set[o] = true
+		if o == "" {
+			continue
 		}
+		if !isKnownOrgMSP(o) {
+			return "", nil, fmt.Errorf("declared co-attesting org %q is not a known organisation on this network", o)
+		}
+		set[o] = true
 	}
 	out := make([]string, 0, len(set))
 	for o := range set {
@@ -425,6 +467,15 @@ func (s *SmartContract) RecordShipment(ctx contractapi.TransactionContextInterfa
 	if err := requireCallerIsOwner(ctx, token); err != nil {
 		return fmt.Errorf("recordShipment rejected: %v", err)
 	}
+	// toOrg becomes the token's new Owner, so an unvalidated or mistyped
+	// value here would orphan the token exactly as an unowned Owner does
+	// elsewhere: no future requireCallerIsOwner check could ever match it
+	// again. Restricting it to a known, deployed organisation closes that
+	// failure mode; it does not, by itself, confirm that organisation
+	// agreed to receive the shipment (Section on defence in depth).
+	if !isKnownOrgMSP(toOrg) {
+		return fmt.Errorf("recordShipment rejected: toOrg %q is not a known organisation on this network", toOrg)
+	}
 	callerMSP, coAttestors, err := recordCoAttestation(ctx, splitCSV(coAttestingOrgsCSV))
 	if err != nil {
 		return err
@@ -503,6 +554,17 @@ func (s *SmartContract) RecordAssembly(ctx contractapi.TransactionContextInterfa
 		if err := requireNotRecalled(tok); err != nil {
 			return fmt.Errorf("recordAssembly rejected for component %s: %v", cid, err)
 		}
+		// requireCallerIs above only confirms the caller is *an* OEM
+		// identity; it does not confirm this specific component was ever
+		// shipped to that OEM. Without this check, an OEM could assemble a
+		// component still owned by another organisation (e.g. shipped
+		// laterally to Tier-1 rather than to the OEM) purely because it is
+		// allowed to call RecordAssembly at all -- the same
+		// role-check-without-possession-check gap RecordShipment and
+		// RecordDelivery were fixed against.
+		if err := requireCallerIsOwner(ctx, tok); err != nil {
+			return fmt.Errorf("recordAssembly rejected for component %s: %v", cid, err)
+		}
 		batchSet[tok.BatchID] = true
 		tokens = append(tokens, tok)
 	}
@@ -558,6 +620,9 @@ func (s *SmartContract) RecordAssembly(ctx contractapi.TransactionContextInterfa
 // after delivery reflects reality instead of still showing it owned by the
 // assembler.
 func (s *SmartContract) RecordDelivery(ctx contractapi.TransactionContextInterface, productID string, dealerID string, coAttestingOrgsCSV string) error {
+	if dealerID == "" {
+		return fmt.Errorf("recordDelivery rejected: dealerID is required")
+	}
 	token, err := s.mustGetToken(ctx, productID)
 	if err != nil {
 		return err
