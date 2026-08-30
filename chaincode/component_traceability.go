@@ -268,6 +268,27 @@ func requireCallerIs(ctx contractapi.TransactionContextInterface, allowed ...str
 	return "", fmt.Errorf("caller org %s is not authorised to call this function (allowed: %v)", callerMSP, allowed)
 }
 
+// requireCallerOU adds a client-role check within an already-authorised MSP.
+// MSP membership alone proves the caller belongs to an organisation, not
+// that every enrolled client in that organisation may perform a
+// safety-critical operation. The evaluated Fabric CA certificates distinguish
+// administrators (OU=admin) from ordinary enrolled users (OU=client).
+func requireCallerOU(ctx contractapi.TransactionContextInterface, allowedOU string) error {
+	cert, err := ctx.GetClientIdentity().GetX509Certificate()
+	if err != nil {
+		return fmt.Errorf("failed to get caller certificate: %v", err)
+	}
+	if cert == nil {
+		return fmt.Errorf("caller certificate is unavailable")
+	}
+	for _, ou := range cert.Subject.OrganizationalUnit {
+		if ou == allowedOU {
+			return nil
+		}
+	}
+	return fmt.Errorf("caller certificate requires OU=%s, got %v", allowedOU, cert.Subject.OrganizationalUnit)
+}
+
 // txTimestamp returns the transaction's Fabric-assigned timestamp rather
 // than the executing peer's local clock. time.Now() would read a different
 // wall-clock value on every peer that (re-)executes this chaincode during
@@ -287,6 +308,7 @@ func txTimestamp(ctx contractapi.TransactionContextInterface) (time.Time, error)
 //
 //	CHECK:  GetState(componentID) == nil (reject if already registered)
 //	CREATE TOKEN -> PutState -> maintain batch~component index -> EMIT ComponentRegistered
+//
 // supplierID is accepted for interface/script compatibility and audit-trail
 // readability only. It is a caller-supplied label, not independently
 // verified, so it is never used to decide the token's owner: the owner is
@@ -705,6 +727,9 @@ func (s *SmartContract) RecordUsageLog(ctx contractapi.TransactionContextInterfa
 	if _, err := requireCallerIs(ctx, oemOrgMSP); err != nil {
 		return fmt.Errorf("recordUsageLog rejected: %v", err)
 	}
+	if err := requireCallerOU(ctx, "admin"); err != nil {
+		return fmt.Errorf("recordUsageLog rejected: %v", err)
+	}
 	callerMSP, coAttestors, err := recordCoAttestation(ctx, splitCSV(coAttestingOrgsCSV))
 	if err != nil {
 		return err
@@ -826,6 +851,9 @@ func (s *SmartContract) TriggerRecall(ctx contractapi.TransactionContextInterfac
 	if callerMSP != oemOrgMSP && callerMSP != regulatorOrgMSP {
 		return "", fmt.Errorf("triggerRecall rejected: caller org must be OEM or Regulator, got %s", callerMSP)
 	}
+	if err := requireCallerOU(ctx, "admin"); err != nil {
+		return "", fmt.Errorf("triggerRecall rejected: %v", err)
+	}
 
 	componentIDs, err := s.batchIndexMembers(ctx, batchID)
 	if err != nil {
@@ -927,6 +955,9 @@ func (s *SmartContract) CloseRecall(ctx contractapi.TransactionContextInterface,
 	if _, err := requireCallerIs(ctx, oemOrgMSP, regulatorOrgMSP); err != nil {
 		return "", fmt.Errorf("closeRecall rejected: %v", err)
 	}
+	if err := requireCallerOU(ctx, "admin"); err != nil {
+		return "", fmt.Errorf("closeRecall rejected: %v", err)
+	}
 	callerMSP, coAttestors, err := recordCoAttestation(ctx, splitCSV(coAttestingOrgsCSV))
 	if err != nil {
 		return "", err
@@ -959,6 +990,9 @@ func (s *SmartContract) ReviseRecallReason(ctx contractapi.TransactionContextInt
 	}
 	if callerMSP != oemOrgMSP && callerMSP != regulatorOrgMSP {
 		return "", fmt.Errorf("reviseRecallReason rejected: caller org must be OEM or Regulator, got %s", callerMSP)
+	}
+	if err := requireCallerOU(ctx, "admin"); err != nil {
+		return "", fmt.Errorf("reviseRecallReason rejected: %v", err)
 	}
 
 	componentIDs, err := s.batchIndexMembers(ctx, batchID)
@@ -1022,6 +1056,9 @@ func (s *SmartContract) RevokeRecall(ctx contractapi.TransactionContextInterface
 	}
 	if callerMSP != regulatorOrgMSP {
 		return "", fmt.Errorf("revokeRecall rejected: caller org must be RegulatorMSP, got %s", callerMSP)
+	}
+	if err := requireCallerOU(ctx, "admin"); err != nil {
+		return "", fmt.Errorf("revokeRecall rejected: %v", err)
 	}
 
 	componentIDs, err := s.batchIndexMembers(ctx, batchID)

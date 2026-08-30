@@ -1,0 +1,48 @@
+^D=== Package/install/approve/commit v3.2 sequence 7 ===
+[34m2026-08-30 02:10:22.673 BST 0001 INFO[0m [cli.lifecycle.chaincode] [34;1msubmitInstallProposal[0m -> Installed remotely: response:<status:200 payload:"\n[component-traceability_3.2:9da97e6c776d9236952dc8ae986163530fa148221a01b7ae40991e4935541bb2\022\032component-traceability_3.2" > 
+[34m2026-08-30 02:10:22.674 BST 0002 INFO[0m [cli.lifecycle.chaincode] [34;1msubmitInstallProposal[0m -> Chaincode code package identifier: component-traceability_3.2:9da97e6c776d9236952dc8ae986163530fa148221a01b7ae40991e4935541bb2
+[34m2026-08-30 02:10:24.893 BST 0001 INFO[0m [chaincodeCmd] [34;1mClientWait[0m -> txid [72b7ea6926a80ef5728c42f2ecffff747f3a705385d5b2784ca343714c871c9d] committed with status (VALID) at localhost:7051
+[34m2026-08-30 02:10:37.308 BST 0001 INFO[0m [cli.lifecycle.chaincode] [34;1msubmitInstallProposal[0m -> Installed remotely: response:<status:200 payload:"\n[component-traceability_3.2:9da97e6c776d9236952dc8ae986163530fa148221a01b7ae40991e4935541bb2\022\032component-traceability_3.2" > 
+[34m2026-08-30 02:10:37.309 BST 0002 INFO[0m [cli.lifecycle.chaincode] [34;1msubmitInstallProposal[0m -> Chaincode code package identifier: component-traceability_3.2:9da97e6c776d9236952dc8ae986163530fa148221a01b7ae40991e4935541bb2
+[34m2026-08-30 02:10:39.413 BST 0001 INFO[0m [chaincodeCmd] [34;1mClientWait[0m -> txid [f60c87cad7ff888b78ee2dba431ab0a8c00ded2c4316671b5167ea8a287eb07a] committed with status (VALID) at localhost:9051
+[34m2026-08-30 02:10:54.923 BST 0001 INFO[0m [cli.lifecycle.chaincode] [34;1msubmitInstallProposal[0m -> Installed remotely: response:<status:200 payload:"\n[component-traceability_3.2:9da97e6c776d9236952dc8ae986163530fa148221a01b7ae40991e4935541bb2\022\032component-traceability_3.2" > 
+[34m2026-08-30 02:10:54.923 BST 0002 INFO[0m [cli.lifecycle.chaincode] [34;1msubmitInstallProposal[0m -> Chaincode code package identifier: component-traceability_3.2:9da97e6c776d9236952dc8ae986163530fa148221a01b7ae40991e4935541bb2
+[34m2026-08-30 02:10:57.010 BST 0001 INFO[0m [chaincodeCmd] [34;1mClientWait[0m -> txid [140579320a862bb52457af18144e9d4c9b5ad7d59b26b795d8b448f742eaf07a] committed with status (VALID) at localhost:11051
+[34m2026-08-30 02:10:59.301 BST 0001 INFO[0m [chaincodeCmd] [34;1mClientWait[0m -> txid [9e4f406f2b15f7d4631f96880c151edff6fb461a8f64cc074a1ab2b630185b72] committed with status (VALID) at localhost:11051
+[34m2026-08-30 02:10:59.334 BST 0002 INFO[0m [chaincodeCmd] [34;1mClientWait[0m -> txid [9e4f406f2b15f7d4631f96880c151edff6fb461a8f64cc074a1ab2b630185b72] committed with status (VALID) at localhost:9051
+[34m2026-08-30 02:10:59.351 BST 0003 INFO[0m [chaincodeCmd] [34;1mClientWait[0m -> txid [9e4f406f2b15f7d4631f96880c151edff6fb461a8f64cc074a1ab2b630185b72] committed with status (VALID) at localhost:7051
+Committed chaincode definition for chaincode 'component-traceability' on channel 'mychannel':
+Version: 3.2, Sequence: 7, Endorsement Plugin: escc, Validation Plugin: vscc, Approvals: [Org1MSP: true, Org2MSP: true, Org3MSP: true]
+=== Recall role test: same MSP, ordinary client rejected ===
+[34m2026-08-30 02:11:01.939 BST 0001 INFO[0m [chaincodeCmd] [34;1mClientWait[0m -> txid [cd87dd5a0c0568fb4ae086f7672e0569aa2b3c901fa0a68165f6aad9c4865d76] committed with status (VALID) at localhost:9051
+[34m2026-08-30 02:11:01.940 BST 0002 INFO[0m [chaincodeCmd] [34;1mClientWait[0m -> txid [cd87dd5a0c0568fb4ae086f7672e0569aa2b3c901fa0a68165f6aad9c4865d76] committed with status (VALID) at localhost:7051
+[34m2026-08-30 02:11:01.940 BST 0003 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 
+Error: endorsement failure during invoke. response: status:500 message:"triggerRecall rejected: caller certificate requires OU=admin, got [client]" 
+[34m2026-08-30 02:11:04.068 BST 0001 INFO[0m [chaincodeCmd] [34;1mClientWait[0m -> txid [94b1554f7e92d3d1e73e44fe03215e74a75740b6c3dfe9260f61e5946a348910] committed with status (VALID) at localhost:9051
+[34m2026-08-30 02:11:04.068 BST 0002 INFO[0m [chaincodeCmd] [34;1mClientWait[0m -> txid [94b1554f7e92d3d1e73e44fe03215e74a75740b6c3dfe9260f61e5946a348910] committed with status (VALID) at localhost:7051
+[34m2026-08-30 02:11:04.068 BST 0003 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 payload:"{\"affectedCount\":1,\"batchId\":\"BATCH-ROLE-LIVE\",\"notifiedOwners\":[\"Org1MSP\"],\"skippedOverlap\":[],\"txId\":\"94b1554f7e92d3d1e73e44fe03215e74a75740b6c3dfe9260f61e5946a348910\"}" 
+Error: endorsement failure during invoke. response: status:500 message:"closeRecall rejected: caller certificate requires OU=admin, got [client]" 
+[34m2026-08-30 02:11:06.191 BST 0001 INFO[0m [chaincodeCmd] [34;1mClientWait[0m -> txid [02e3c7158ab9905b441cb8540f062b4d53478afff1c90c2f4ccc9c19d18484d2] committed with status (VALID) at localhost:9051
+[34m2026-08-30 02:11:06.198 BST 0002 INFO[0m [chaincodeCmd] [34;1mClientWait[0m -> txid [02e3c7158ab9905b441cb8540f062b4d53478afff1c90c2f4ccc9c19d18484d2] committed with status (VALID) at localhost:7051
+[34m2026-08-30 02:11:06.198 BST 0003 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 payload:"{\"componentId\":\"ROLE-LIVE-1\",\"lifecycleStatus\":\"MANUFACTURED\",\"recallStatus\":\"REPAIRED\",\"txId\":\"02e3c7158ab9905b441cb8540f062b4d53478afff1c90c2f4ccc9c19d18484d2\"}" 
+=== Usage role test: delivered token, same MSP client rejected ===
+[34m2026-08-30 02:11:08.294 BST 0001 INFO[0m [chaincodeCmd] [34;1mClientWait[0m -> txid [14fbee24da64b9c29d6430d237718863c8cd3f6480e409e01b0d50097c950421] committed with status (VALID) at localhost:9051
+[34m2026-08-30 02:11:08.295 BST 0002 INFO[0m [chaincodeCmd] [34;1mClientWait[0m -> txid [14fbee24da64b9c29d6430d237718863c8cd3f6480e409e01b0d50097c950421] committed with status (VALID) at localhost:7051
+[34m2026-08-30 02:11:08.295 BST 0003 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 
+[34m2026-08-30 02:11:10.414 BST 0001 INFO[0m [chaincodeCmd] [34;1mClientWait[0m -> txid [8af2109f9a0f358789144e374365ba05f867d2020d8cf4b71a22cea0c2a0da62] committed with status (VALID) at localhost:9051
+[34m2026-08-30 02:11:10.414 BST 0002 INFO[0m [chaincodeCmd] [34;1mClientWait[0m -> txid [8af2109f9a0f358789144e374365ba05f867d2020d8cf4b71a22cea0c2a0da62] committed with status (VALID) at localhost:7051
+[34m2026-08-30 02:11:10.415 BST 0003 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 
+[34m2026-08-30 02:11:12.505 BST 0001 INFO[0m [chaincodeCmd] [34;1mClientWait[0m -> txid [ece2f74e1653f02783968d308574ba08d6f2a9d76a22ddabeb4068bba18f9329] committed with status (VALID) at localhost:9051
+[34m2026-08-30 02:11:12.505 BST 0002 INFO[0m [chaincodeCmd] [34;1mClientWait[0m -> txid [ece2f74e1653f02783968d308574ba08d6f2a9d76a22ddabeb4068bba18f9329] committed with status (VALID) at localhost:7051
+[34m2026-08-30 02:11:12.506 BST 0003 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 
+[34m2026-08-30 02:11:14.658 BST 0001 INFO[0m [chaincodeCmd] [34;1mClientWait[0m -> txid [edbf36f256651f19c72dc005f490370a45b9dc48c578f97ac2b91e70af82cae2] committed with status (VALID) at localhost:7051
+[34m2026-08-30 02:11:14.658 BST 0002 INFO[0m [chaincodeCmd] [34;1mClientWait[0m -> txid [edbf36f256651f19c72dc005f490370a45b9dc48c578f97ac2b91e70af82cae2] committed with status (VALID) at localhost:9051
+[34m2026-08-30 02:11:14.659 BST 0003 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 
+[34m2026-08-30 02:11:16.741 BST 0001 INFO[0m [chaincodeCmd] [34;1mClientWait[0m -> txid [374e51031e397da5d3ea403eab5396609e8a92a2016c2d135d966639c34820be] committed with status (VALID) at localhost:7051
+[34m2026-08-30 02:11:16.745 BST 0002 INFO[0m [chaincodeCmd] [34;1mClientWait[0m -> txid [374e51031e397da5d3ea403eab5396609e8a92a2016c2d135d966639c34820be] committed with status (VALID) at localhost:9051
+[34m2026-08-30 02:11:16.745 BST 0003 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 
+Error: endorsement failure during invoke. response: status:500 message:"recordUsageLog rejected: caller certificate requires OU=admin, got [client]" 
+[34m2026-08-30 02:11:18.874 BST 0001 INFO[0m [chaincodeCmd] [34;1mClientWait[0m -> txid [685c36ced9a2064f890708d1e9db3c81d32b8934096aeae75dc41e541c5f295c] committed with status (VALID) at localhost:7051
+[34m2026-08-30 02:11:18.875 BST 0002 INFO[0m [chaincodeCmd] [34;1mClientWait[0m -> txid [685c36ced9a2064f890708d1e9db3c81d32b8934096aeae75dc41e541c5f295c] committed with status (VALID) at localhost:9051
+[34m2026-08-30 02:11:18.875 BST 0003 INFO[0m [chaincodeCmd] [34;1mchaincodeInvokeOrQuery[0m -> Chaincode invoke successful. result: status:200 
+=== Scenario 11 complete ===

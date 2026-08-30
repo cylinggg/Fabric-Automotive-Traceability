@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"fmt"
 	"sort"
 	"strings"
@@ -152,19 +154,28 @@ func (it *fakeIterator) Next() (*queryresult.KV, error) {
 type fakeCtx struct {
 	stub     *fakeStub
 	callerID string
+	callerOU string
 }
 
 func (c *fakeCtx) GetStub() shim.ChaincodeStubInterface { return c.stub }
 func (c *fakeCtx) GetClientIdentity() cid.ClientIdentity {
-	return &fakeClientIdentity{mspID: c.callerID}
+	return &fakeClientIdentity{mspID: c.callerID, ou: c.callerOU}
 }
 
 type fakeClientIdentity struct {
 	cid.ClientIdentity
 	mspID string
+	ou    string
 }
 
 func (f *fakeClientIdentity) GetMSPID() (string, error) { return f.mspID, nil }
+func (f *fakeClientIdentity) GetX509Certificate() (*x509.Certificate, error) {
+	ou := f.ou
+	if ou == "" {
+		ou = "admin" // existing fixtures model the Admin identities used live
+	}
+	return &x509.Certificate{Subject: pkix.Name{OrganizationalUnit: []string{ou}}}, nil
+}
 
 var _ contractapi.TransactionContextInterface = (*fakeCtx)(nil)
 
@@ -940,6 +951,51 @@ func TestRegisterComponent_RejectsUnknownCoAttestingOrg(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "not a known organisation") {
 		t.Fatalf("expected a known-organisation error, got: %v", err)
+	}
+}
+
+func TestSafetyCriticalFunctions_RejectOrdinaryClientWithinAuthorisedMSP(t *testing.T) {
+	s := &SmartContract{}
+	stub := newFakeStub("tx-role")
+	adminCtx := &fakeCtx{stub: stub, callerID: oemOrgMSP, callerOU: "admin"}
+	clientCtx := &fakeCtx{stub: stub, callerID: oemOrgMSP, callerOU: "client"}
+
+	if err := s.RegisterComponent(adminCtx, "COMP-ROLE1", "BATCH-ROLE", "OEM", reportHash("r"), "Org2MSP"); err != nil {
+		t.Fatalf("setup registration failed: %v", err)
+	}
+	if _, err := s.TriggerRecall(clientCtx, "BATCH-ROLE", "ordinary client must not trigger recall"); err == nil || !strings.Contains(err.Error(), "OU=admin") {
+		t.Fatalf("ordinary OEM client should be rejected from TriggerRecall, got: %v", err)
+	}
+	if _, err := s.TriggerRecall(adminCtx, "BATCH-ROLE", "admin recall"); err != nil {
+		t.Fatalf("admin TriggerRecall failed: %v", err)
+	}
+	if _, err := s.CloseRecall(clientCtx, "COMP-ROLE1", "REPAIRED", "ordinary client", "Org2MSP"); err == nil || !strings.Contains(err.Error(), "OU=admin") {
+		t.Fatalf("ordinary OEM client should be rejected from CloseRecall, got: %v", err)
+	}
+	if _, err := s.ReviseRecallReason(clientCtx, "BATCH-ROLE", "ordinary client amendment"); err == nil || !strings.Contains(err.Error(), "OU=admin") {
+		t.Fatalf("ordinary OEM client should be rejected from ReviseRecallReason, got: %v", err)
+	}
+	regulatorClientCtx := &fakeCtx{stub: stub, callerID: regulatorOrgMSP, callerOU: "client"}
+	if _, err := s.RevokeRecall(regulatorClientCtx, "BATCH-ROLE", "ordinary client"); err == nil || !strings.Contains(err.Error(), "OU=admin") {
+		t.Fatalf("ordinary regulator client should be rejected from RevokeRecall, got: %v", err)
+	}
+}
+
+func TestRecordUsageLog_RejectsOrdinaryOEMClient(t *testing.T) {
+	s := &SmartContract{}
+	stub := newFakeStub("tx-role-usage")
+	adminCtx := &fakeCtx{stub: stub, callerID: oemOrgMSP, callerOU: "admin"}
+	clientCtx := &fakeCtx{stub: stub, callerID: oemOrgMSP, callerOU: "client"}
+
+	shipComponent(t, s, adminCtx, "COMP-ROLE2", "BATCH-ROLE2")
+	if err := s.RecordAssembly(adminCtx, "PRODUCT-ROLE2", "COMP-ROLE2", "RECIPE-ROLE2", "Org2MSP"); err != nil {
+		t.Fatalf("setup assembly failed: %v", err)
+	}
+	if err := s.RecordDelivery(adminCtx, "PRODUCT-ROLE2", "Dealer1", "Org2MSP"); err != nil {
+		t.Fatalf("setup delivery failed: %v", err)
+	}
+	if err := s.RecordUsageLog(clientCtx, "COMP-ROLE2", 90, "Org2MSP"); err == nil || !strings.Contains(err.Error(), "OU=admin") {
+		t.Fatalf("ordinary OEM client should be rejected from RecordUsageLog, got: %v", err)
 	}
 }
 

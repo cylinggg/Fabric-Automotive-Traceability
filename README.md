@@ -39,7 +39,7 @@ on this network).
 
 Proactively, ahead of further review, three residual gaps were then
 closed and deployed as version 3.1, sequence 6, tagged `v3.1-submission`
-(the final submission tag): `RecordShipment`'s `toOrg` (the new owner) is
+: `RecordShipment`'s `toOrg` (the new owner) is
 now validated against the network's known organisations, so a mistyped
 or fabricated destination can no longer permanently orphan a token;
 `RecordAssembly` now checks that the OEM actually holds each listed
@@ -52,6 +52,15 @@ check. `v2.0-`, `v2.1-`, `v2.2-`, and `v3.0-submission` are earlier,
 superseded tags kept for history. See the chaincode's top-of-file
 comments and the evidence log filenames below for the exact evidence
 boundary.
+
+Version 3.2, sequence 7 adds an intra-organisation role boundary. Safety-
+critical recall administration (`TriggerRecall`, `CloseRecall`,
+`ReviseRecallReason`, `RevokeRecall`) and the prototype OEM telemetry relay
+(`RecordUsageLog`) require both an authorised MSP and an `OU=admin` X.509
+certificate. A real Org1 `OU=client` identity was rejected while the Org1
+admin completed the same paths; see
+`evidence/real_fabric_run8_client_role.log`. This is a test-network role
+model, not a claim that production telemetry should require an administrator.
 
 ## What is actually in this repo
 
@@ -291,6 +300,9 @@ of this network's three deployed organisations (`recordCoAttestation`),
 `RecordShipment`'s destination organisation is validated the same way,
 and `RecordAssembly` checks that the OEM actually holds each listed
 component, not only that the caller has the OEM role.
+As of v3.2/sequence 7, the five safety-critical functions identified above
+also check the caller certificate's organisational unit; MSP membership alone
+is no longer sufficient for them.
 
 | Function | Peer endorsement | Caller authorisation | Business precondition | Purpose |
 |---|---|---|---|---|
@@ -301,13 +313,13 @@ component, not only that the caller has the OEM role.
 | `RecordShipment` | Implicit majority | Current owner (MSP) only | ≥2 co-attesting orgs declared; `toOrg` must be a known network org; status `QC_PASSED`; not currently RECALLED | Transfer custody; status → `SHIPPED`; the `fromOwner` argument is retained only for audit-trail readability and no longer checked |
 | `RecordAssembly` | Implicit majority | OEM org only, and OEM must currently own every listed component | ≥2 co-attesting orgs declared; every listed component `SHIPPED` and not currently RECALLED (may span multiple batches) | Combine components into a product token, recording every distinct constituent batch in `componentBatches`; status → `ASSEMBLED` |
 | `RecordDelivery` | Implicit majority | Current owner (MSP) only | ≥2 co-attesting orgs declared; `dealerID` non-empty; status `ASSEMBLED`; not currently RECALLED | Final transfer to dealer; status → `DELIVERED`; cascades to every component |
-| `RecordUsageLog` | Implicit majority | OEM org only | ≥2 co-attesting orgs declared; status `DELIVERED`; not currently RECALLED | Attach field telemetry to a token; OEM stands in for the (undeployed) dealer/service-centre identity on this 3-org network |
+| `RecordUsageLog` | Implicit majority | OEM org + `OU=admin` | ≥2 co-attesting orgs declared; status `DELIVERED`; not currently RECALLED | Attach field telemetry to a token; OEM admin is a test-network relay for the undeployed dealer/service-centre identity, not the recommended production role |
 | `WarrantyCheck` | N/A (query) | None | None | Apply a threshold rule to usage data |
 | `ProvenanceCheck` (formerly `CounterfeitScan`) | N/A (query) | None | None | Verify ledger registration + declared co-attestation count (`REGISTERED_WITH_DECLARED_PARTICIPANTS`, not physical authenticity — renamed from `REGISTERED_WITH_SUFFICIENT_ATTESTATION` in v3.0) |
-| `TriggerRecall` | Implicit majority | OEM or Regulator org only | None beyond caller check | Batch-level recall via composite-key index; sets `recallStatus` and `recallBatchId` (never touches lifecycle `status`); single aggregated event; a product is found via *any* of its constituent batches; a token already recalled under a *different* batch is reported as `skippedOverlap`, not relabelled |
-| `CloseRecall` | Implicit majority | OEM or Regulator org only | ≥2 co-attesting orgs declared; `recallStatus` = `RECALLED` | Resolve a recalled token's `recallStatus` to `REPAIRED`/`REPLACED`/`RETIRED`; lifecycle `status` is left untouched |
-| `ReviseRecallReason` | Implicit majority | OEM or Regulator org only | Token's `recallBatchId` must match the named batch | Append an amendment to a batch's recall reason, restricted to tokens whose `recallBatchId` matches that batch, without overwriting it |
-| `RevokeRecall` | Implicit majority | Regulator org only | Token's `recallBatchId` must match the named batch | Clear `recallStatus`/`recallBatchId` back to empty for tokens whose `recallBatchId` matches the named batch only, restoring visibility of whatever lifecycle `status` the token actually had; a token still recalled under a *different* batch is left untouched (v2.1 fix — v2.0 could incorrectly clear it) |
+| `TriggerRecall` | Implicit majority | OEM or Regulator org + `OU=admin` | None beyond caller check | Batch-level recall via composite-key index; sets `recallStatus` and `recallBatchId` (never touches lifecycle `status`); single aggregated event; a product is found via *any* of its constituent batches; a token already recalled under a *different* batch is reported as `skippedOverlap`, not relabelled |
+| `CloseRecall` | Implicit majority | OEM or Regulator org + `OU=admin` | ≥2 co-attesting orgs declared; `recallStatus` = `RECALLED` | Resolve a recalled token's `recallStatus` to `REPAIRED`/`REPLACED`/`RETIRED`; lifecycle `status` is left untouched |
+| `ReviseRecallReason` | Implicit majority | OEM or Regulator org + `OU=admin` | Token's `recallBatchId` must match the named batch | Append an amendment to a batch's recall reason, restricted to tokens whose `recallBatchId` matches that batch, without overwriting it |
+| `RevokeRecall` | Implicit majority | Regulator org + `OU=admin` | Token's `recallBatchId` must match the named batch | Clear `recallStatus`/`recallBatchId` back to empty for tokens whose `recallBatchId` matches the named batch only, restoring visibility of whatever lifecycle `status` the token actually had; a token still recalled under a *different* batch is left untouched (v2.1 fix — v2.0 could incorrectly clear it) |
 | `GetHistory` | N/A (query) | None | None | Return the full on-chain version history of a token via `GetHistoryForKey` |
 
 Every write function above that operates on an existing token also rejects
