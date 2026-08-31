@@ -66,19 +66,36 @@ checks compared the caller's MSP against that same field, no enrolled
 identity could ever pass the check again once either of the latter two
 values overwrote it -- a gap already known to block `AttachEvidence`
 after delivery, but which also blocked it on any
-assembled-but-undelivered component. Version 3.3, sequence 8, tagged
-`v3.3-submission` (the final submission tag) splits this into
-`CustodianMSP` (always a real, deployed MSP), `InstalledInProductID`,
-and `DealerID`: assembly and delivery now record the latter two
-separately without touching `CustodianMSP`, so ownership checks keep
-working at every lifecycle stage. Exercised live
-(`evidence/real_fabric_run9_custodian_field_separation.log`):
+assembled-but-undelivered component. Version 3.3, sequence 8, splits this into `CustodianMSP` (always a real,
+deployed MSP), `InstalledInProductID`, and `DealerID`: assembly and
+delivery now record the latter two separately without touching
+`CustodianMSP`, so ownership checks keep working at every lifecycle
+stage. Exercised live (`evidence/real_fabric_run9_custodian_field_separation.log`):
 `AttachEvidence` now succeeds both on an assembled-but-undelivered
 component and after delivery, confirmed by live queries showing
-`custodianMsp` unchanged throughout. `v2.0-`, `v2.1-`, `v2.2-`,
-`v3.0-`, `v3.1-`, and `v3.2-submission` are earlier, superseded tags
-kept for history. See the chaincode's top-of-file comments and the
-evidence log filenames below for the exact evidence boundary.
+`custodianMsp` unchanged throughout.
+
+Two gaps stated as untested/unimplemented immediately after v3.3
+shipped were then closed as version 3.4, sequence 9, tagged
+`v3.4-submission` (the final submission tag). First, a record written
+before v3.3 has no `custodianMsp` key at all, so it read back empty;
+`mustGetToken` now falls back to the legacy `owner` key when
+`custodianMsp` is empty, verified against a genuine pre-v3.3 record
+still on this network's real ledger (`AUTH-NEG-TEST`, registered under
+v3.0 during Scenario 9) rather than a synthetic example -- this is
+read-time compatibility only, not a migration, and cannot recover a
+legacy record whose `owner` had already been overwritten with a
+non-MSP value before v3.3 existed. Second, a transaction was
+deliberately submitted with only one organisation's peer address when
+the committed policy requires more, producing a real
+`ENDORSEMENT_POLICY_FAILURE` and no committed state, closing the
+"insufficient peer endorsement... not evaluated" gap stated throughout
+the dissertation. Both are exercised live in
+`evidence/real_fabric_run10_legacy_compatibility.log`. `v2.0-`,
+`v2.1-`, `v2.2-`, `v3.0-`, `v3.1-`, `v3.2-`, and `v3.3-submission` are
+earlier, superseded tags kept for history. See the chaincode's
+top-of-file comments and the evidence log filenames below for the
+exact evidence boundary.
 
 ## What is actually in this repo
 
