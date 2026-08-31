@@ -83,6 +83,40 @@ import (
 //	    gained a plain non-empty check on dealerID. Unit-tested (31 cases,
 //	    4 new) and exercised live on the same three-organisation network
 //	    (evidence/real_fabric_run7_proactive_hardening.log; Scenario 10).
+//	3.2 (sequence 7): intra-organisation role boundary. MSP membership
+//	    alone proves the caller belongs to an authorised organisation, not
+//	    that every enrolled client in it may perform a safety-critical
+//	    operation. TriggerRecall, CloseRecall, ReviseRecallReason,
+//	    RevokeRecall, and RecordUsageLog now additionally require an
+//	    X.509 OU=admin certificate (requireCallerOU), rejecting an
+//	    OU=client identity even from an otherwise-authorised MSP. Exercised
+//	    live with the network's real Org1 Admin and User1 certificates
+//	    (evidence/real_fabric_run8_client_role.log; Scenario 11); this is a
+//	    coarse test-network role model, not a claim that production
+//	    telemetry should require a full administrator.
+//	3.3 (sequence 8): CustodianMSP/InstalledInProductID/DealerID field
+//	    separation, prompted by supervisor review. The single Owner field
+//	    held three different concepts across a token's lifetime: an MSP
+//	    identity after registration, a productID after RecordAssembly, and
+//	    a caller-supplied dealerID after RecordDelivery. Since
+//	    requireCallerIsOwner compared the caller's MSP against that same
+//	    field, no enrolled identity could ever pass the check again once
+//	    either of the latter two values overwrote it -- a gap Scenario 9
+//	    had already surfaced for AttachEvidence after delivery, but which
+//	    also affected AttachEvidence on any assembled-but-undelivered
+//	    component, not previously tested. CustodianMSP now holds only a
+//	    real, deployed MSP and is never overwritten with a productID or
+//	    dealerID; RecordAssembly records InstalledInProductID and
+//	    RecordDelivery records DealerID as separate fields instead,
+//	    renamed requireCallerIsOwner to requireCallerIsCustodian throughout
+//	    (compares against CustodianMSP), and RecordUsageLog switched from a
+//	    hardcoded OEM role check to the same CustodianMSP check every other
+//	    function uses, since CustodianMSP now correctly survives delivery.
+//	    Unit-tested (4 new cases proving CustodianMSP survives assembly and
+//	    delivery, and that AttachEvidence now succeeds in both cases
+//	    previously blocked) and exercised live on the same
+//	    three-organisation network (evidence/real_fabric_run9_custodian_field_separation.log;
+//	    Scenario 12).
 type SmartContract struct {
 	contractapi.Contract
 }
@@ -120,6 +154,28 @@ type SmartContract struct {
 //     (was it DELIVERED? still ASSEMBLED?). Keeping the two fields apart
 //     means a recall can be triggered, resolved, or revoked without ever
 //     touching the lifecycle history the rest of the system depends on.
+//   - CustodianMSP, InstalledInProductID, and DealerID were previously one
+//     overloaded field (Owner), which held a real MSP identity right after
+//     registration, then a productID once a component was assembled
+//     (RecordAssembly), then a caller-supplied dealerID once delivered
+//     (RecordDelivery). Because caller authorisation compares the caller's
+//     MSP against that same field, an assembled-but-undelivered component
+//     could never again pass an ownership check (a productID is not an
+//     MSP), and no enrolled identity could pass one after delivery either
+//     (a dealerID is not an MSP) -- identified in supervisor review.
+//     CustodianMSP now holds only ever a real, deployed MSP and is never
+//     overwritten with a productID or dealerID: RecordAssembly records
+//     InstalledInProductID separately without touching the component's
+//     CustodianMSP, and RecordDelivery records DealerID separately without
+//     touching CustodianMSP either, so a caller can still be authorised
+//     against a token's real custodian after assembly and after delivery.
+//     This is a deliberate design choice, not an oversight: CustodianMSP
+//     answers "which enrolled organisation is accountable for this token",
+//     which remains the OEM once a component is installed into a product
+//     it assembled, or once a product it delivered leaves the channel's
+//     membership -- not "who currently has physical possession", which
+//     InstalledInProductID and DealerID answer separately and which this
+//     chaincode cannot authenticate cryptographically (see Limitations).
 //
 // Ledger registration (this struct existing at TokenID) also only proves
 // that *some* authorised client wrote this record; it does not, by itself,
@@ -149,7 +205,9 @@ type ComponentToken struct {
 	Status           string              `json:"status"`                  // lifecycle only: MANUFACTURED, QC_PASSED, SHIPPED, ASSEMBLED, DELIVERED (never RECALLED; see RecallStatus)
 	RecallStatus     string              `json:"recallStatus,omitempty"`  // "" (never recalled), RECALLED, or a CloseRecall resolution (REPAIRED, REPLACED, RETIRED); independent of Status
 	RecallBatchID    string              `json:"recallBatchId,omitempty"` // which batch's TriggerRecall call set the current RecallStatus; see the cross-batch overlap note on TriggerRecall
-	Owner            string              `json:"owner"`
+	CustodianMSP         string `json:"custodianMsp"`                   // authenticated MSP currently accountable for this token; always one of this network's real, deployed organisations (see requireCallerIsCustodian). Never overwritten with a productID or dealerID -- see InstalledInProductID and DealerID below.
+	InstalledInProductID string `json:"installedInProductId,omitempty"` // set once a component has been assembled into a product (RecordAssembly); the component's own CustodianMSP is left unchanged, so ownership checks on it continue to work after assembly
+	DealerID             string `json:"dealerId,omitempty"`             // caller-supplied business identifier for the delivery destination (RecordDelivery); NOT an MSP and never compared against a caller's authenticated identity -- CustodianMSP is deliberately left unchanged on delivery so it remains a real, checkable identity
 	DataHash         string              `json:"dataHash,omitempty"` // legacy latest digest retained for v2.1 compatibility
 	Evidence         []EvidenceReference `json:"evidence,omitempty"` // typed references to separately stored off-chain documents
 	SubmittingOrgMSP string              `json:"submittingOrgMspId"` // cryptographically verified by Fabric for this transaction
@@ -220,30 +278,40 @@ func recordCoAttestation(ctx contractapi.TransactionContextInterface, declaredOr
 	return callerMSP, out, nil
 }
 
-// requireCallerIsOwner enforces that the transaction's authenticated MSP
+// requireCallerIsCustodian enforces that the transaction's authenticated MSP
 // identity, not any caller-supplied business string, matches the token's
-// current custodian before a custody-changing or custody-scoped operation
+// CustodianMSP before a custody-changing or custody-scoped operation
 // proceeds.
 //
 // This exists to close a caller-authorisation gap identified in supervisor
 // review: several functions previously checked only a caller-supplied claim
 // against the token (e.g. RecordShipment's now-removed fromOwner check,
-// which compared token.Owner to a string the caller itself typed in) and
-// never verified that the caller's own cryptographically authenticated
-// identity actually matched. Under that design, any enrolled participant
-// who merely knew or guessed the current owner value could act on a token
-// they did not hold, because the check never touched
-// ctx.GetClientIdentity() at all. Comparing against callerMSP here instead
-// ties the decision to the same MSP identity Fabric itself authenticates
-// for every transaction, which cannot be forged by the caller the way a
-// plain string argument can.
-func requireCallerIsOwner(ctx contractapi.TransactionContextInterface, token *ComponentToken) error {
+// which compared a single overloaded Owner field to a string the caller
+// itself typed in) and never verified that the caller's own
+// cryptographically authenticated identity actually matched. Under that
+// design, any enrolled participant who merely knew or guessed the current
+// owner value could act on a token they did not hold, because the check
+// never touched ctx.GetClientIdentity() at all. Comparing against callerMSP
+// here instead ties the decision to the same MSP identity Fabric itself
+// authenticates for every transaction, which cannot be forged by the caller
+// the way a plain string argument can.
+//
+// A second, later review round found that Owner itself was overloaded
+// across the lifecycle -- an MSP identity, then a productID, then a
+// dealerID -- which meant this check could never succeed again once either
+// of the latter two overwrote it (see the ComponentToken doc comment).
+// Comparing against the now-separate CustodianMSP field fixes that: a
+// component's custodian survives assembly (InstalledInProductID is set
+// instead) and a product's custodian survives delivery (DealerID is set
+// instead), so this check keeps working at every lifecycle stage rather
+// than only until the first productID/dealerID assignment.
+func requireCallerIsCustodian(ctx contractapi.TransactionContextInterface, token *ComponentToken) error {
 	callerMSP, err := ctx.GetClientIdentity().GetMSPID()
 	if err != nil {
 		return fmt.Errorf("failed to get caller MSP: %v", err)
 	}
-	if callerMSP != token.Owner {
-		return fmt.Errorf("caller %s is not the current owner of token %s (owner is %s)", callerMSP, token.TokenID, token.Owner)
+	if callerMSP != token.CustodianMSP {
+		return fmt.Errorf("caller %s is not the current custodian of token %s (custodian is %s)", callerMSP, token.TokenID, token.CustodianMSP)
 	}
 	return nil
 }
@@ -311,9 +379,9 @@ func txTimestamp(ctx contractapi.TransactionContextInterface) (time.Time, error)
 //
 // supplierID is accepted for interface/script compatibility and audit-trail
 // readability only. It is a caller-supplied label, not independently
-// verified, so it is never used to decide the token's owner: the owner is
-// always the caller's own authenticated MSP identity (see
-// requireCallerIsOwner). Only the OEM or the (one, deployed) Tier-1
+// verified, so it is never used to decide the token's custodian: the
+// custodian is always the caller's own authenticated MSP identity (see
+// requireCallerIsCustodian). Only the OEM or the (one, deployed) Tier-1
 // supplier org may register a new component; the Regulator may not.
 func (s *SmartContract) RegisterComponent(ctx contractapi.TransactionContextInterface,
 	componentID string, batchID string, supplierID string, testReportHash string, coAttestingOrgsCSV string) error {
@@ -353,7 +421,7 @@ func (s *SmartContract) RegisterComponent(ctx contractapi.TransactionContextInte
 		TokenID:          componentID,
 		BatchID:          batchID,
 		Status:           "MANUFACTURED",
-		Owner:            callerMSP, // authenticated identity, not the caller-supplied supplierID
+		CustodianMSP:     callerMSP, // authenticated identity, not the caller-supplied supplierID
 		DataHash:         testReportHash,
 		SubmittingOrgMSP: callerMSP,
 		CoAttestingOrgs:  coAttestors,
@@ -383,7 +451,7 @@ func (s *SmartContract) RecordTest(ctx contractapi.TransactionContextInterface, 
 	if err := requireNotRecalled(token); err != nil {
 		return err
 	}
-	if err := requireCallerIsOwner(ctx, token); err != nil {
+	if err := requireCallerIsCustodian(ctx, token); err != nil {
 		return fmt.Errorf("recordTest rejected: %v", err)
 	}
 	if err := requireHashLike(testReportHash); err != nil {
@@ -423,7 +491,7 @@ func (s *SmartContract) AttachEvidence(ctx contractapi.TransactionContextInterfa
 			return fmt.Errorf("attachEvidence rejected: evidence %s already exists on token %s", evidenceID, tokenID)
 		}
 	}
-	if err := requireCallerIsOwner(ctx, token); err != nil {
+	if err := requireCallerIsCustodian(ctx, token); err != nil {
 		return fmt.Errorf("attachEvidence rejected: %v", err)
 	}
 	callerMSP, coAttestors, err := recordCoAttestation(ctx, splitCSV(coAttestingOrgsCSV))
@@ -462,19 +530,20 @@ func (s *SmartContract) GetEvidence(ctx contractapi.TransactionContextInterface,
 // Requires the component to currently be QC_PASSED.
 //
 // fromOwner is retained for interface/script compatibility and audit-trail
-// readability only; it used to be compared directly against token.Owner as
-// the sole authorisation check, which meant any enrolled caller who simply
-// knew or guessed the right string, not necessarily the actual owner, could
-// ship someone else's component. That check has been removed in favour of
-// requireCallerIsOwner, which instead compares the caller's own
-// cryptographically authenticated MSP identity to the token's current
-// owner. fromOwner is no longer used to decide anything.
+// readability only; it used to be compared directly against the token's
+// (then single, overloaded) Owner field as the sole authorisation check,
+// which meant any enrolled caller who simply knew or guessed the right
+// string, not necessarily the actual custodian, could ship someone else's
+// component. That check has been removed in favour of
+// requireCallerIsCustodian, which instead compares the caller's own
+// cryptographically authenticated MSP identity to the token's CustodianMSP.
+// fromOwner is no longer used to decide anything.
 //
-// toOrg becomes the new Owner as a caller-supplied destination declaration;
-// this authenticates the sender's authority to release custody, not an
-// acceptance signature from the receiving organisation. Requiring the
-// receiver to also endorse the transfer is a natural extension left for
-// future work (Limitations).
+// toOrg becomes the new CustodianMSP as a caller-supplied destination
+// declaration; this authenticates the sender's authority to release
+// custody, not an acceptance signature from the receiving organisation.
+// Requiring the receiver to also endorse the transfer is a natural
+// extension left for future work (Limitations).
 func (s *SmartContract) RecordShipment(ctx contractapi.TransactionContextInterface, componentID string, fromOwner string, toOrg string, coAttestingOrgsCSV string) error {
 	token, err := s.mustGetToken(ctx, componentID)
 	if err != nil {
@@ -486,15 +555,15 @@ func (s *SmartContract) RecordShipment(ctx contractapi.TransactionContextInterfa
 	if err := requireNotRecalled(token); err != nil {
 		return err
 	}
-	if err := requireCallerIsOwner(ctx, token); err != nil {
+	if err := requireCallerIsCustodian(ctx, token); err != nil {
 		return fmt.Errorf("recordShipment rejected: %v", err)
 	}
-	// toOrg becomes the token's new Owner, so an unvalidated or mistyped
-	// value here would orphan the token exactly as an unowned Owner does
-	// elsewhere: no future requireCallerIsOwner check could ever match it
-	// again. Restricting it to a known, deployed organisation closes that
-	// failure mode; it does not, by itself, confirm that organisation
-	// agreed to receive the shipment (Section on defence in depth).
+	// toOrg becomes the token's new CustodianMSP, so an unvalidated or
+	// mistyped value here would orphan the token: no future
+	// requireCallerIsCustodian check could ever match it again. Restricting
+	// it to a known, deployed organisation closes that failure mode; it
+	// does not, by itself, confirm that organisation agreed to receive the
+	// shipment (Section on defence in depth).
 	if !isKnownOrgMSP(toOrg) {
 		return fmt.Errorf("recordShipment rejected: toOrg %q is not a known organisation on this network", toOrg)
 	}
@@ -505,7 +574,7 @@ func (s *SmartContract) RecordShipment(ctx contractapi.TransactionContextInterfa
 	if len(coAttestors) < minCoAttestingOrgs {
 		return fmt.Errorf("recordShipment rejected: needs >=%d co-attesting orgs", minCoAttestingOrgs)
 	}
-	token.Owner = toOrg
+	token.CustodianMSP = toOrg
 	token.SubmittingOrgMSP = callerMSP
 	token.CoAttestingOrgs = coAttestors
 	token.Status = "SHIPPED"
@@ -584,7 +653,7 @@ func (s *SmartContract) RecordAssembly(ctx contractapi.TransactionContextInterfa
 		// allowed to call RecordAssembly at all -- the same
 		// role-check-without-possession-check gap RecordShipment and
 		// RecordDelivery were fixed against.
-		if err := requireCallerIsOwner(ctx, tok); err != nil {
+		if err := requireCallerIsCustodian(ctx, tok); err != nil {
 			return fmt.Errorf("recordAssembly rejected for component %s: %v", cid, err)
 		}
 		batchSet[tok.BatchID] = true
@@ -598,9 +667,15 @@ func (s *SmartContract) RecordAssembly(ctx contractapi.TransactionContextInterfa
 
 	// Only mutate world state after every precondition above has passed, so
 	// a rejected assembly never leaves some components half-updated.
+	// InstalledInProductID records that this component is now part of a
+	// product; CustodianMSP is deliberately left unchanged (still the OEM,
+	// confirmed above), so a later AttachEvidence or similar call against
+	// this specific component ID can still authorise correctly -- an
+	// earlier version overwrote Owner with productID here, which broke
+	// exactly that check for the rest of the component's lifetime.
 	for _, tok := range tokens {
 		tok.Status = "ASSEMBLED"
-		tok.Owner = productID
+		tok.InstalledInProductID = productID
 		if err := s.putToken(ctx, tok, ""); err != nil {
 			return err
 		}
@@ -617,7 +692,7 @@ func (s *SmartContract) RecordAssembly(ctx contractapi.TransactionContextInterfa
 		ComponentBatches: componentBatches,
 		RecipeID:         recipeID,
 		Status:           "ASSEMBLED",
-		Owner:            oemOrgMSP,
+		CustodianMSP:     oemOrgMSP,
 		Components:       componentIDs,
 		SubmittingOrgMSP: callerMSP,
 		CoAttestingOrgs:  coAttestors,
@@ -655,7 +730,7 @@ func (s *SmartContract) RecordDelivery(ctx contractapi.TransactionContextInterfa
 	if err := requireNotRecalled(token); err != nil {
 		return err
 	}
-	if err := requireCallerIsOwner(ctx, token); err != nil {
+	if err := requireCallerIsCustodian(ctx, token); err != nil {
 		return fmt.Errorf("recordDelivery rejected: %v", err)
 	}
 	callerMSP, coAttestors, err := recordCoAttestation(ctx, splitCSV(coAttestingOrgsCSV))
@@ -678,7 +753,15 @@ func (s *SmartContract) RecordDelivery(ctx contractapi.TransactionContextInterfa
 		componentTokens = append(componentTokens, ctok)
 	}
 
-	token.Owner = dealerID
+	// DealerID records the delivery destination as caller-supplied business
+	// data; CustodianMSP is deliberately left unchanged (still the OEM,
+	// confirmed above by requireCallerIsCustodian) rather than overwritten
+	// with a non-MSP value. An earlier version overwrote Owner with
+	// dealerID here, which meant no enrolled identity could ever pass an
+	// ownership check on this token again (a dealerID is not an MSP);
+	// CustodianMSP staying a real, checkable identity after delivery is
+	// what lets AttachEvidence and RecordUsageLog keep working afterwards.
+	token.DealerID = dealerID
 	token.SubmittingOrgMSP = callerMSP
 	token.CoAttestingOrgs = coAttestors
 	token.Status = "DELIVERED"
@@ -686,7 +769,7 @@ func (s *SmartContract) RecordDelivery(ctx contractapi.TransactionContextInterfa
 		return err
 	}
 	for _, ctok := range componentTokens {
-		ctok.Owner = dealerID
+		ctok.DealerID = dealerID
 		ctok.Status = "DELIVERED"
 		if err := s.putToken(ctx, ctok, ""); err != nil {
 			return err
@@ -703,16 +786,23 @@ func (s *SmartContract) RecordDelivery(ctx contractapi.TransactionContextInterfa
 // SHIPPED/ASSEMBLED, contradicting the dissertation's own stated design.
 // That gap is fixed below by requiring Status == DELIVERED explicitly.
 //
-// Caller authorisation is restricted to the OEM. The real post-delivery
-// custodian is a dealer or service centre, but this evaluated network
-// deploys only three organisations (OEM, Tier-1 supplier, Regulator; see
-// README / Limitations) and has no separate dealer MSP to authenticate
-// against, so RecordUsageLog cannot use requireCallerIsOwner the way the
-// other lifecycle functions do (token.Owner after delivery is a
-// caller-supplied dealer label, not a channel identity). The OEM is used
-// here as the verified relay for field telemetry in this simplified model;
-// a production design would add a dealer/service organisation and
-// authenticate it directly instead.
+// Caller authorisation now checks CustodianMSP like every other lifecycle
+// function, rather than hardcoding the OEM as a special case. The real
+// post-delivery custodian of the physical product is a dealer or service
+// centre, but this evaluated network deploys only three organisations
+// (OEM, Tier-1 supplier, Regulator; see README / Limitations) and has no
+// separate dealer MSP to authenticate against. Because RecordDelivery
+// records the delivery destination in the separate DealerID field and
+// deliberately leaves CustodianMSP unchanged, CustodianMSP still correctly
+// names the OEM after delivery, so requireCallerIsCustodian works here
+// exactly as it does everywhere else -- no special-casing required. (An
+// earlier version reached the same OEM-only outcome by hardcoding
+// requireCallerIs(ctx, oemOrgMSP) instead, precisely because the
+// then-single Owner field had already been overwritten with a dealerID by
+// this point and could no longer be compared meaningfully.) A production
+// design would still add a real dealer/service organisation so telemetry
+// is authenticated from the party that actually reports it, instead of
+// relayed through the OEM.
 func (s *SmartContract) RecordUsageLog(ctx contractapi.TransactionContextInterface, componentID string, avgTempC float64, coAttestingOrgsCSV string) error {
 	token, err := s.mustGetToken(ctx, componentID)
 	if err != nil {
@@ -724,7 +814,7 @@ func (s *SmartContract) RecordUsageLog(ctx contractapi.TransactionContextInterfa
 	if err := requireNotRecalled(token); err != nil {
 		return err
 	}
-	if _, err := requireCallerIs(ctx, oemOrgMSP); err != nil {
+	if err := requireCallerIsCustodian(ctx, token); err != nil {
 		return fmt.Errorf("recordUsageLog rejected: %v", err)
 	}
 	if err := requireCallerOU(ctx, "admin"); err != nil {
@@ -888,7 +978,17 @@ func (s *SmartContract) TriggerRecall(ctx contractapi.TransactionContextInterfac
 		if err := s.putToken(ctx, token, ""); err != nil {
 			return "", err
 		}
-		ownerSet[token.Owner] = true
+		// Notify whoever currently has the token: the dealer if it has
+		// been delivered, otherwise the on-chain custodian organisation.
+		// DealerID is caller-supplied business data, not an authenticated
+		// identity, but it is the more useful notification target once a
+		// product has left the channel's membership -- the JSON field name
+		// (notifiedOwners) is unchanged for evidence-log compatibility.
+		notifyTarget := token.CustodianMSP
+		if token.DealerID != "" {
+			notifyTarget = token.DealerID
+		}
+		ownerSet[notifyTarget] = true
 		recalledIDs = append(recalledIDs, tokenID)
 		affected++
 	}

@@ -669,8 +669,8 @@ func TestRegisterComponent_SetsOwnerToCallerNotSupplierIDString(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to read back token: %v", err)
 	}
-	if tok.Owner != tier1OrgMSP {
-		t.Fatalf("Owner = %q, want the caller's own authenticated MSP (%q), not the supplierID string", tok.Owner, tier1OrgMSP)
+	if tok.CustodianMSP != tier1OrgMSP {
+		t.Fatalf("CustodianMSP = %q, want the caller's own authenticated MSP (%q), not the supplierID string", tok.CustodianMSP, tier1OrgMSP)
 	}
 }
 
@@ -690,7 +690,7 @@ func TestRecordTest_RejectsNonOwnerCaller(t *testing.T) {
 	if err == nil {
 		t.Fatalf("RecordTest from a non-owner caller should be rejected, got nil error")
 	}
-	if !strings.Contains(err.Error(), "is not the current owner") {
+	if !strings.Contains(err.Error(), "is not the current custodian") {
 		t.Fatalf("expected an ownership authorisation error, got: %v", err)
 	}
 }
@@ -715,7 +715,7 @@ func TestRecordShipment_RejectsNonOwnerCaller(t *testing.T) {
 	if err == nil {
 		t.Fatalf("RecordShipment from a non-owner caller should be rejected, got nil error")
 	}
-	if !strings.Contains(err.Error(), "is not the current owner") {
+	if !strings.Contains(err.Error(), "is not the current custodian") {
 		t.Fatalf("expected an ownership authorisation error, got: %v", err)
 	}
 }
@@ -752,7 +752,7 @@ func TestRecordDelivery_RejectsNonOwnerCaller(t *testing.T) {
 	if err == nil {
 		t.Fatalf("RecordDelivery from a non-owner caller should be rejected, got nil error")
 	}
-	if !strings.Contains(err.Error(), "is not the current owner") {
+	if !strings.Contains(err.Error(), "is not the current custodian") {
 		t.Fatalf("expected an ownership authorisation error, got: %v", err)
 	}
 }
@@ -770,8 +770,99 @@ func TestAttachEvidence_RejectsNonOwnerCaller(t *testing.T) {
 	if err == nil {
 		t.Fatalf("AttachEvidence from a non-owner caller should be rejected, got nil error")
 	}
-	if !strings.Contains(err.Error(), "is not the current owner") {
+	if !strings.Contains(err.Error(), "is not the current custodian") {
 		t.Fatalf("expected an ownership authorisation error, got: %v", err)
+	}
+}
+
+// --- CustodianMSP/InstalledInProductID/DealerID field separation
+// (supervisor feedback: the single Owner field held an MSP identity, then
+// a productID, then a dealerID, so ownership checks could never succeed
+// again once either of the latter two overwrote it) ---
+
+func TestRecordAssembly_PreservesComponentCustodianMSP(t *testing.T) {
+	s := &SmartContract{}
+	stub := newFakeStub("tx1")
+	oemCtx := &fakeCtx{stub: stub, callerID: oemOrgMSP}
+
+	shipComponent(t, s, oemCtx, "COMP-FIELD1", "BATCH-FIELD1")
+	if err := s.RecordAssembly(oemCtx, "PRODUCT-FIELD1", "COMP-FIELD1", "RECIPE-FIELD1", "Org2MSP"); err != nil {
+		t.Fatalf("setup RecordAssembly failed: %v", err)
+	}
+	tok, err := s.mustGetToken(oemCtx, "COMP-FIELD1")
+	if err != nil {
+		t.Fatalf("failed to read back component: %v", err)
+	}
+	if tok.CustodianMSP != oemOrgMSP {
+		t.Fatalf("CustodianMSP = %q after assembly, want unchanged (%q); an earlier version overwrote this with the productID", tok.CustodianMSP, oemOrgMSP)
+	}
+	if tok.InstalledInProductID != "PRODUCT-FIELD1" {
+		t.Fatalf("InstalledInProductID = %q, want PRODUCT-FIELD1", tok.InstalledInProductID)
+	}
+}
+
+func TestRecordDelivery_PreservesCustodianMSPSetsDealerID(t *testing.T) {
+	s := &SmartContract{}
+	stub := newFakeStub("tx1")
+	oemCtx := &fakeCtx{stub: stub, callerID: oemOrgMSP}
+
+	shipComponent(t, s, oemCtx, "COMP-FIELD2", "BATCH-FIELD2")
+	if err := s.RecordAssembly(oemCtx, "PRODUCT-FIELD2", "COMP-FIELD2", "RECIPE-FIELD2", "Org2MSP"); err != nil {
+		t.Fatalf("setup RecordAssembly failed: %v", err)
+	}
+	if err := s.RecordDelivery(oemCtx, "PRODUCT-FIELD2", "Dealer1", "Org2MSP"); err != nil {
+		t.Fatalf("setup RecordDelivery failed: %v", err)
+	}
+	for _, id := range []string{"PRODUCT-FIELD2", "COMP-FIELD2"} {
+		tok, err := s.mustGetToken(oemCtx, id)
+		if err != nil {
+			t.Fatalf("failed to read back %s: %v", id, err)
+		}
+		if tok.CustodianMSP != oemOrgMSP {
+			t.Fatalf("%s: CustodianMSP = %q after delivery, want unchanged (%q); an earlier version overwrote this with the dealerID, permanently blocking every future ownership check", id, tok.CustodianMSP, oemOrgMSP)
+		}
+		if tok.DealerID != "Dealer1" {
+			t.Fatalf("%s: DealerID = %q, want Dealer1", id, tok.DealerID)
+		}
+	}
+}
+
+func TestAttachEvidence_SucceedsOnAssembledComponentBeforeDelivery(t *testing.T) {
+	s := &SmartContract{}
+	stub := newFakeStub("tx1")
+	oemCtx := &fakeCtx{stub: stub, callerID: oemOrgMSP}
+
+	shipComponent(t, s, oemCtx, "COMP-FIELD3", "BATCH-FIELD3")
+	if err := s.RecordAssembly(oemCtx, "PRODUCT-FIELD3", "COMP-FIELD3", "RECIPE-FIELD3", "Org2MSP"); err != nil {
+		t.Fatalf("setup RecordAssembly failed: %v", err)
+	}
+	// Under the old single-Owner-field design, COMP-FIELD3's Owner would
+	// now be "PRODUCT-FIELD3" (a productID, not an MSP), so this call
+	// would have failed for every possible caller. CustodianMSP is
+	// unaffected by assembly, so it succeeds here.
+	if err := s.AttachEvidence(oemCtx, "COMP-FIELD3", "EVID-FIELD3", "QUALITY_TEST_REPORT", reportHash("evidence"), oemOrgMSP, "repo://field3", "Org2MSP"); err != nil {
+		t.Fatalf("AttachEvidence on an assembled-but-undelivered component should succeed, got: %v", err)
+	}
+}
+
+func TestAttachEvidence_SucceedsAfterDelivery(t *testing.T) {
+	s := &SmartContract{}
+	stub := newFakeStub("tx1")
+	oemCtx := &fakeCtx{stub: stub, callerID: oemOrgMSP}
+
+	shipComponent(t, s, oemCtx, "COMP-FIELD4", "BATCH-FIELD4")
+	if err := s.RecordAssembly(oemCtx, "PRODUCT-FIELD4", "COMP-FIELD4", "RECIPE-FIELD4", "Org2MSP"); err != nil {
+		t.Fatalf("setup RecordAssembly failed: %v", err)
+	}
+	if err := s.RecordDelivery(oemCtx, "PRODUCT-FIELD4", "Dealer1", "Org2MSP"); err != nil {
+		t.Fatalf("setup RecordDelivery failed: %v", err)
+	}
+	// Under the old design this was a documented limitation (Scenario 9):
+	// delivery overwrote Owner with "Dealer1" (not an MSP), so no caller
+	// could ever pass the ownership check again. CustodianMSP remains the
+	// OEM after delivery, so this now succeeds.
+	if err := s.AttachEvidence(oemCtx, "COMP-FIELD4", "EVID-FIELD4", "QUALITY_TEST_REPORT", reportHash("evidence"), oemOrgMSP, "repo://field4", "Org2MSP"); err != nil {
+		t.Fatalf("AttachEvidence after delivery should now succeed (previously a documented limitation), got: %v", err)
 	}
 }
 
@@ -835,8 +926,12 @@ func TestRecordUsageLog_RejectsNonOEMCaller(t *testing.T) {
 	if err == nil {
 		t.Fatalf("RecordUsageLog from a non-OEM caller should be rejected, got nil error")
 	}
-	if !strings.Contains(err.Error(), "not authorised") {
-		t.Fatalf("expected an authorisation error, got: %v", err)
+	// RecordUsageLog now checks CustodianMSP like every other lifecycle
+	// function (rather than a hardcoded OEM role check), since
+	// CustodianMSP correctly survives delivery unchanged; the rejection is
+	// therefore a custodian mismatch, not a role-list rejection.
+	if !strings.Contains(err.Error(), "is not the current custodian") {
+		t.Fatalf("expected a custodian authorisation error, got: %v", err)
 	}
 }
 
@@ -914,7 +1009,7 @@ func TestRecordAssembly_RejectsComponentNotOwnedByCaller(t *testing.T) {
 	if err == nil {
 		t.Fatalf("RecordAssembly on a component the OEM does not own should be rejected, got nil error")
 	}
-	if !strings.Contains(err.Error(), "is not the current owner") {
+	if !strings.Contains(err.Error(), "is not the current custodian") {
 		t.Fatalf("expected an ownership authorisation error, got: %v", err)
 	}
 }
