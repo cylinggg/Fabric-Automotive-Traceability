@@ -38,29 +38,47 @@ and a real discovered limitation (`AttachEvidence` cannot follow
 on this network).
 
 Proactively, ahead of further review, three residual gaps were then
-closed and deployed as version 3.1, sequence 6, tagged `v3.1-submission`
-: `RecordShipment`'s `toOrg` (the new owner) is
-now validated against the network's known organisations, so a mistyped
-or fabricated destination can no longer permanently orphan a token;
-`RecordAssembly` now checks that the OEM actually holds each listed
-component, not only that the caller has the OEM role; and declared
-`CoAttestingOrgs` names are rejected if they do not name a real, deployed
-organisation. Exercised live
+closed and deployed as version 3.1, sequence 6: `RecordShipment`'s
+`toOrg` (the new owner) is now validated against the network's known
+organisations, so a mistyped or fabricated destination can no longer
+permanently orphan a token; `RecordAssembly` now checks that the OEM
+actually holds each listed component, not only that the caller has the
+OEM role; and declared `CoAttestingOrgs` names are rejected if they do
+not name a real, deployed organisation. Exercised live
 (`evidence/real_fabric_run7_proactive_hardening.log`): a full authorised
 path unaffected by the new checks, plus one genuine rejection per new
-check. `v2.0-`, `v2.1-`, `v2.2-`, and `v3.0-submission` are earlier,
-superseded tags kept for history. See the chaincode's top-of-file
-comments and the evidence log filenames below for the exact evidence
-boundary.
+check.
 
-Version 3.2, sequence 7 adds an intra-organisation role boundary. Safety-
-critical recall administration (`TriggerRecall`, `CloseRecall`,
-`ReviseRecallReason`, `RevokeRecall`) and the prototype OEM telemetry relay
-(`RecordUsageLog`) require both an authorised MSP and an `OU=admin` X.509
-certificate. A real Org1 `OU=client` identity was rejected while the Org1
-admin completed the same paths; see
-`evidence/real_fabric_run8_client_role.log`. This is a test-network role
-model, not a claim that production telemetry should require an administrator.
+Version 3.2, sequence 7 added an intra-organisation role boundary: MSP
+membership alone proves the caller belongs to an authorised
+organisation, not that every enrolled client in it may perform a
+safety-critical operation. `TriggerRecall`, `CloseRecall`,
+`ReviseRecallReason`, `RevokeRecall`, and `RecordUsageLog` now
+additionally require an X.509 `OU=admin` certificate, exercised live
+with the network's real Org1 Admin and User1 certificates
+(`evidence/real_fabric_run8_client_role.log`).
+
+Further supervisor review then found that the single `Owner` field held
+three different concepts across a token's lifetime: an MSP identity
+after registration, a `productID` after `RecordAssembly`, and a
+caller-supplied `dealerID` after `RecordDelivery`. Since ownership
+checks compared the caller's MSP against that same field, no enrolled
+identity could ever pass the check again once either of the latter two
+values overwrote it -- a gap already known to block `AttachEvidence`
+after delivery, but which also blocked it on any
+assembled-but-undelivered component. Version 3.3, sequence 8, tagged
+`v3.3-submission` (the final submission tag) splits this into
+`CustodianMSP` (always a real, deployed MSP), `InstalledInProductID`,
+and `DealerID`: assembly and delivery now record the latter two
+separately without touching `CustodianMSP`, so ownership checks keep
+working at every lifecycle stage. Exercised live
+(`evidence/real_fabric_run9_custodian_field_separation.log`):
+`AttachEvidence` now succeeds both on an assembled-but-undelivered
+component and after delivery, confirmed by live queries showing
+`custodianMsp` unchanged throughout. `v2.0-`, `v2.1-`, `v2.2-`,
+`v3.0-`, `v3.1-`, and `v3.2-submission` are earlier, superseded tags
+kept for history. See the chaincode's top-of-file comments and the
+evidence log filenames below for the exact evidence boundary.
 
 ## What is actually in this repo
 
@@ -307,12 +325,12 @@ is no longer sufficient for them.
 | Function | Peer endorsement | Caller authorisation | Business precondition | Purpose |
 |---|---|---|---|---|
 | `RegisterComponent` | Implicit majority | OEM or Tier-1 org only | ≥2 co-attesting orgs declared; component ID must not already exist | Mint a new component token; owner is the caller's own MSP, never the caller-supplied `supplierID`; takes a client-computed SHA-256 hash of the report, not the report text |
-| `RecordTest` | Implicit majority | Current owner (MSP) only | ≥2 co-attesting orgs declared; status `MANUFACTURED`; not currently RECALLED | Commit client-hashed QC test-report digest; status → `QC_PASSED` |
-| `AttachEvidence` | Implicit majority | Current owner (MSP) only | ≥2 co-attesting orgs declared; evidence ID must be unique within the token | Append typed metadata and a client-computed SHA-256 digest for an externally stored document; document bytes never enter Fabric; must run before `RecordDelivery` (see Limitations below) |
+| `RecordTest` | Implicit majority | Current custodian (MSP) only | ≥2 co-attesting orgs declared; status `MANUFACTURED`; not currently RECALLED | Commit client-hashed QC test-report digest; status → `QC_PASSED` |
+| `AttachEvidence` | Implicit majority | Current custodian (MSP) only | ≥2 co-attesting orgs declared; evidence ID must be unique within the token | Append typed metadata and a client-computed SHA-256 digest for an externally stored document; document bytes never enter Fabric; works at any lifecycle stage, including after delivery (v3.3) |
 | `GetEvidence` | N/A (query) | None | None | Return evidence references and verification metadata; actual document retrieval remains off-chain |
-| `RecordShipment` | Implicit majority | Current owner (MSP) only | ≥2 co-attesting orgs declared; `toOrg` must be a known network org; status `QC_PASSED`; not currently RECALLED | Transfer custody; status → `SHIPPED`; the `fromOwner` argument is retained only for audit-trail readability and no longer checked |
-| `RecordAssembly` | Implicit majority | OEM org only, and OEM must currently own every listed component | ≥2 co-attesting orgs declared; every listed component `SHIPPED` and not currently RECALLED (may span multiple batches) | Combine components into a product token, recording every distinct constituent batch in `componentBatches`; status → `ASSEMBLED` |
-| `RecordDelivery` | Implicit majority | Current owner (MSP) only | ≥2 co-attesting orgs declared; `dealerID` non-empty; status `ASSEMBLED`; not currently RECALLED | Final transfer to dealer; status → `DELIVERED`; cascades to every component |
+| `RecordShipment` | Implicit majority | Current custodian (MSP) only | ≥2 co-attesting orgs declared; `toOrg` must be a known network org; status `QC_PASSED`; not currently RECALLED | Transfer custody; status → `SHIPPED`; the `fromOwner` argument is retained only for audit-trail readability and no longer checked |
+| `RecordAssembly` | Implicit majority | OEM org only, and OEM must currently be the custodian of every listed component | ≥2 co-attesting orgs declared; every listed component `SHIPPED` and not currently RECALLED (may span multiple batches) | Combine components into a product token, recording every distinct constituent batch in `componentBatches`; status → `ASSEMBLED` |
+| `RecordDelivery` | Implicit majority | Current custodian (MSP) only | ≥2 co-attesting orgs declared; `dealerID` non-empty; status `ASSEMBLED`; not currently RECALLED | Final transfer to dealer; status → `DELIVERED`; cascades to every component |
 | `RecordUsageLog` | Implicit majority | OEM org + `OU=admin` | ≥2 co-attesting orgs declared; status `DELIVERED`; not currently RECALLED | Attach field telemetry to a token; OEM admin is a test-network relay for the undeployed dealer/service-centre identity, not the recommended production role |
 | `WarrantyCheck` | N/A (query) | None | None | Apply a threshold rule to usage data |
 | `ProvenanceCheck` (formerly `CounterfeitScan`) | N/A (query) | None | None | Verify ledger registration + declared co-attestation count (`REGISTERED_WITH_DECLARED_PARTICIPANTS`, not physical authenticity — renamed from `REGISTERED_WITH_SUFFICIENT_ATTESTATION` in v3.0) |
