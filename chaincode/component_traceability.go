@@ -117,6 +117,24 @@ import (
 //	    previously blocked) and exercised live on the same
 //	    three-organisation network (evidence/real_fabric_run9_custodian_field_separation.log;
 //	    Scenario 12).
+//	3.4 (sequence 9): read-time compatibility for pre-v3.3 ledger records.
+//	    A record written before v3.3 has no custodianMsp key at all, so
+//	    CustodianMSP unmarshals to empty rather than an error -- a gap
+//	    identified and stated as untested/unimplemented in the
+//	    dissertation immediately after v3.3 shipped. mustGetToken now
+//	    falls back to decoding the legacy "owner" key when CustodianMSP is
+//	    empty, so a genuinely legacy record that was never assembled or
+//	    delivered under the old design (and so still holds a real MSP in
+//	    "owner") can be read and authorised against correctly. This is
+//	    read-time compatibility, not a migration: nothing is written back,
+//	    and a legacy record whose "owner" had already been overwritten
+//	    with a productID or dealerID before v3.3 existed cannot be
+//	    recovered, since that value was never a usable MSP identity to
+//	    begin with. Unit-tested (2 new cases, one proving recovery and one
+//	    proving the honest boundary) and exercised live on the same
+//	    three-organisation network against a genuine pre-v3.3 record still
+//	    on the real ledger (evidence/real_fabric_run10_legacy_compatibility.log;
+//	    Scenario 13).
 type SmartContract struct {
 	contractapi.Contract
 }
@@ -1284,6 +1302,14 @@ func requireHashLike(s string) error {
 	return nil
 }
 
+// legacyOwnerToken decodes only the single field ("owner") that a
+// pre-v3.3 ledger record used before CustodianMSP/InstalledInProductID/
+// DealerID existed. It is consulted only as a read-time fallback (see
+// mustGetToken); it never writes anything back to the ledger.
+type legacyOwnerToken struct {
+	Owner string `json:"owner"`
+}
+
 func (s *SmartContract) mustGetToken(ctx contractapi.TransactionContextInterface, id string) (*ComponentToken, error) {
 	bytes, err := ctx.GetStub().GetState(id)
 	if err != nil {
@@ -1295,6 +1321,31 @@ func (s *SmartContract) mustGetToken(ctx contractapi.TransactionContextInterface
 	var token ComponentToken
 	if err := json.Unmarshal(bytes, &token); err != nil {
 		return nil, err
+	}
+	if token.CustodianMSP == "" {
+		// A record written before v3.3 has no "custodianMsp" key at all,
+		// so json.Unmarshal leaves CustodianMSP at its zero value here
+		// rather than an error -- Go does not rename json fields across
+		// versions on its own. Fall back to decoding the legacy "owner"
+		// key so the token can still be read and its custodian
+		// identified, instead of silently treating it as ownerless. This
+		// is read-time compatibility only, not a migration: the ledger
+		// record itself is unchanged until the next write to this key,
+		// at which point CustodianMSP is populated normally and this
+		// fallback is no longer needed for it.
+		//
+		// This recovers the custodian correctly only for a legacy record
+		// that was never assembled or delivered under the old design: if
+		// "owner" had already been overwritten with a productID or
+		// dealerID (the exact bug version 3.3 fixes), that overwritten
+		// value is what gets read back here too, and it was already not
+		// a usable MSP identity at the time it was written -- no
+		// read-time fallback can recover information the old design had
+		// already discarded.
+		var legacy legacyOwnerToken
+		if err := json.Unmarshal(bytes, &legacy); err == nil && legacy.Owner != "" {
+			token.CustodianMSP = legacy.Owner
+		}
 	}
 	return &token, nil
 }

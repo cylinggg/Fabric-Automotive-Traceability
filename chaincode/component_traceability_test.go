@@ -1094,6 +1094,66 @@ func TestRecordUsageLog_RejectsOrdinaryOEMClient(t *testing.T) {
 	}
 }
 
+// --- legacy-record read compatibility (a genuine gap this dissertation
+// documents rather than hides: pre-v3.3 ledger records have no
+// custodianMsp key at all) ---
+
+func TestMustGetToken_RecoversLegacyOwnerAsCustodianMSP(t *testing.T) {
+	s := &SmartContract{}
+	stub := newFakeStub("tx1")
+	ctx := &fakeCtx{stub: stub, callerID: oemOrgMSP}
+
+	// Simulate a genuine pre-v3.3 record: registered, tested, but never
+	// assembled or delivered, so "owner" still holds the real MSP that
+	// registered it and was never overwritten with a non-MSP value.
+	legacyJSON := `{"docType":"component","tokenId":"LEGACY-1","batchId":"BATCH-LEGACY","status":"MANUFACTURED","owner":"Org1MSP","submittingOrgMspId":"Org1MSP","coAttestingOrgs":["Org1MSP","Org2MSP"]}`
+	stub.state["LEGACY-1"] = []byte(legacyJSON)
+
+	tok, err := s.mustGetToken(ctx, "LEGACY-1")
+	if err != nil {
+		t.Fatalf("failed to read legacy record: %v", err)
+	}
+	if tok.CustodianMSP != oemOrgMSP {
+		t.Fatalf("CustodianMSP = %q, want %q recovered from the legacy owner field", tok.CustodianMSP, oemOrgMSP)
+	}
+	// Confirm this recovery is actually usable, not just present: a
+	// caller-authorisation check against this legacy record must now
+	// succeed for its real custodian.
+	if err := s.AttachEvidence(ctx, "LEGACY-1", "EV-LEGACY-1", "QUALITY_TEST_REPORT", reportHash("legacy evidence"), oemOrgMSP, "repo://legacy1", "Org2MSP"); err != nil {
+		t.Fatalf("AttachEvidence on a recovered legacy record should succeed, got: %v", err)
+	}
+}
+
+func TestMustGetToken_LegacyOwnerAlreadyOverwrittenCannotRecoverUsableCustodian(t *testing.T) {
+	s := &SmartContract{}
+	stub := newFakeStub("tx1")
+	oemCtx := &fakeCtx{stub: stub, callerID: oemOrgMSP}
+
+	// Simulate a pre-v3.3 record where "owner" had already been
+	// overwritten with a dealer label (the exact bug v3.3 fixes going
+	// forward). The read-time fallback recovers whatever string is
+	// there, but that string was never a usable MSP identity in the
+	// first place -- no fallback can recover information the old design
+	// had already discarded before v3.3 existed.
+	legacyJSON := `{"docType":"component","tokenId":"LEGACY-2","batchId":"BATCH-LEGACY","status":"DELIVERED","owner":"Dealer1","submittingOrgMspId":"Org1MSP","coAttestingOrgs":["Org1MSP","Org2MSP"]}`
+	stub.state["LEGACY-2"] = []byte(legacyJSON)
+
+	tok, err := s.mustGetToken(oemCtx, "LEGACY-2")
+	if err != nil {
+		t.Fatalf("failed to read legacy record: %v", err)
+	}
+	if tok.CustodianMSP != "Dealer1" {
+		t.Fatalf("CustodianMSP = %q, want the literal (unusable) legacy value %q", tok.CustodianMSP, "Dealer1")
+	}
+	err = s.AttachEvidence(oemCtx, "LEGACY-2", "EV-LEGACY-2", "QUALITY_TEST_REPORT", reportHash("legacy evidence 2"), oemOrgMSP, "repo://legacy2", "Org2MSP")
+	if err == nil {
+		t.Fatalf("AttachEvidence on a legacy record already overwritten with a dealer label should still be rejected for every caller, got nil error")
+	}
+	if !strings.Contains(err.Error(), "is not the current custodian") {
+		t.Fatalf("expected a custodian authorisation error, got: %v", err)
+	}
+}
+
 func TestReviseRecallReason_DoesNotAmendTokenOwnedByDifferentBatch(t *testing.T) {
 	s := &SmartContract{}
 	stub := newFakeStub("tx1")
