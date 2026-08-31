@@ -1,0 +1,112 @@
+=== Scenario 14 (FABRIC TEST-NETWORK): RecallCampaigns, the one-to-many
+=== replacement for the pre-v3.5 scalar RecallBatchID/Reason/ReasonHistory
+=== fields, version 3.5, sequence 10. Produced by
+=== scripts/scenario_14_recall_campaigns_live.sh against the same
+=== three-organisation Fabric test-network used throughout this
+=== dissertation. Unedited console output below (ANSI colour codes
+=== stripped only).
+===
+=== This scenario closes the gap named explicitly in supervisor review of
+=== the fifth draft and, until this version, deliberately documented as a
+=== partial solution: the RecallBatchID fix evaluated through v3.4
+=== (Scenario 7) prevented one recall campaign from silently overwriting
+=== another, but a second, independent campaign against the same product
+=== could only ever be reported as skippedOverlap -- it was never itself
+=== tracked or independently resolvable. PRODUCT-OV14 is assembled from
+=== two components in two different batches, then recalled under BOTH:
+=== Part A shows both BATCH-OV14-X and BATCH-OV14-Y open simultaneously in
+=== recallCampaigns, something no pre-v3.5 GetComponent response could
+=== ever show. Part B shows CloseRecall resolving BATCH-OV14-X's campaign
+=== alone (to REPAIRED) while BATCH-OV14-Y stays RECALLED and the
+=== product's overall recallStatus stays RECALLED, then RevokeRecall
+=== clearing BATCH-OV14-Y; both campaigns' full history (reason,
+=== reasonHistory, terminal status) remains on the ledger afterwards,
+=== rather than being deleted the way the pre-v3.5 scalar fields were on
+=== revocation.
+
+=== 1. Package current chaincode source (RecallCampaigns) as v3.5 ===
+Package ID: component-traceability_3.5:b2a0452426ebaa5963a64a83f2aeca1793cd144dff99a77703ff03a48df2ea2f
+=== 2. Install on Org1, Org2, Org3 ===
+2026-08-31 22:10:49.140 BST 0001 INFO [cli.lifecycle.chaincode] submitInstallProposal -> Installed remotely: response:<status:200 payload:"\n[component-traceability_3.5:b2a0452426ebaa5963a64a83f2aeca1793cd144dff99a77703ff03a48df2ea2f\022\032component-traceability_3.5" > 
+2026-08-31 22:10:49.141 BST 0002 INFO [cli.lifecycle.chaincode] submitInstallProposal -> Chaincode code package identifier: component-traceability_3.5:b2a0452426ebaa5963a64a83f2aeca1793cd144dff99a77703ff03a48df2ea2f
+2026-08-31 22:11:01.825 BST 0001 INFO [cli.lifecycle.chaincode] submitInstallProposal -> Installed remotely: response:<status:200 payload:"\n[component-traceability_3.5:b2a0452426ebaa5963a64a83f2aeca1793cd144dff99a77703ff03a48df2ea2f\022\032component-traceability_3.5" > 
+2026-08-31 22:11:01.826 BST 0002 INFO [cli.lifecycle.chaincode] submitInstallProposal -> Chaincode code package identifier: component-traceability_3.5:b2a0452426ebaa5963a64a83f2aeca1793cd144dff99a77703ff03a48df2ea2f
+2026-08-31 22:11:14.925 BST 0001 INFO [cli.lifecycle.chaincode] submitInstallProposal -> Installed remotely: response:<status:200 payload:"\n[component-traceability_3.5:b2a0452426ebaa5963a64a83f2aeca1793cd144dff99a77703ff03a48df2ea2f\022\032component-traceability_3.5" > 
+2026-08-31 22:11:14.926 BST 0002 INFO [cli.lifecycle.chaincode] submitInstallProposal -> Chaincode code package identifier: component-traceability_3.5:b2a0452426ebaa5963a64a83f2aeca1793cd144dff99a77703ff03a48df2ea2f
+=== 3. Approve v3.5 sequence 10 for Org1, Org2, Org3 ===
+2026-08-31 22:11:17.138 BST 0001 INFO [chaincodeCmd] ClientWait -> txid [9d747c30e7f59ab722fba7f9f65edb6f7d560ade305aa458a0b3c1f7d6506d74] committed with status (VALID) at localhost:7051
+2026-08-31 22:11:19.352 BST 0001 INFO [chaincodeCmd] ClientWait -> txid [61516fa04368a42d739c0720b43b00907a7d2d0673139f801c147725b0aecf20] committed with status (VALID) at localhost:9051
+2026-08-31 22:11:21.418 BST 0001 INFO [chaincodeCmd] ClientWait -> txid [384bd5404cb0e73db1eb1a83d2ccf9f47aa160a7a3f6ad832af26b2c37cb71f0] committed with status (VALID) at localhost:11051
+=== 4. checkcommitreadiness ===
+{
+	"approvals": {
+		"Org1MSP": true,
+		"Org2MSP": true,
+		"Org3MSP": true
+	}
+}
+=== 5. Commit v3.5 sequence 10 ===
+2026-08-31 22:11:23.697 BST 0001 INFO [chaincodeCmd] ClientWait -> txid [382ad206f6f8e6026da39fb3281903d157a2ca43bf46f235bb1e36620bd580fb] committed with status (VALID) at localhost:11051
+2026-08-31 22:11:23.731 BST 0002 INFO [chaincodeCmd] ClientWait -> txid [382ad206f6f8e6026da39fb3281903d157a2ca43bf46f235bb1e36620bd580fb] committed with status (VALID) at localhost:7051
+2026-08-31 22:11:23.732 BST 0003 INFO [chaincodeCmd] ClientWait -> txid [382ad206f6f8e6026da39fb3281903d157a2ca43bf46f235bb1e36620bd580fb] committed with status (VALID) at localhost:9051
+=== querycommitted ===
+Committed chaincode definition for chaincode 'component-traceability' on channel 'mychannel':
+Version: 3.5, Sequence: 10, Endorsement Plugin: escc, Validation Plugin: vscc, Approvals: [Org1MSP: true, Org2MSP: true, Org3MSP: true]
+
+############################################################
+### PART A: build a product spanning two batches, then recall it under BOTH ###
+############################################################
+--- Register+test+ship two components under two different batches ---
+2026-08-31 22:11:26.337 BST 0001 INFO [chaincodeCmd] ClientWait -> txid [626baee24aa4ac4cad7de6dc61694a0abbd810fe580918a0f7b8057cc85f6d89] committed with status (VALID) at localhost:7051
+2026-08-31 22:11:26.340 BST 0002 INFO [chaincodeCmd] ClientWait -> txid [626baee24aa4ac4cad7de6dc61694a0abbd810fe580918a0f7b8057cc85f6d89] committed with status (VALID) at localhost:9051
+2026-08-31 22:11:26.340 BST 0003 INFO [chaincodeCmd] chaincodeInvokeOrQuery -> Chaincode invoke successful. result: status:200 
+2026-08-31 22:11:28.428 BST 0001 INFO [chaincodeCmd] ClientWait -> txid [cbc8518d05621271dab9f97ab00fa939209a7147048830fda8a2674a8d151229] committed with status (VALID) at localhost:7051
+2026-08-31 22:11:28.428 BST 0002 INFO [chaincodeCmd] ClientWait -> txid [cbc8518d05621271dab9f97ab00fa939209a7147048830fda8a2674a8d151229] committed with status (VALID) at localhost:9051
+2026-08-31 22:11:28.429 BST 0003 INFO [chaincodeCmd] chaincodeInvokeOrQuery -> Chaincode invoke successful. result: status:200 
+2026-08-31 22:11:30.512 BST 0001 INFO [chaincodeCmd] ClientWait -> txid [36dc974a4c42907eec0dc29646ed88ffe6d635e34e27407a8519b31ce2c875dc] committed with status (VALID) at localhost:7051
+2026-08-31 22:11:30.514 BST 0002 INFO [chaincodeCmd] ClientWait -> txid [36dc974a4c42907eec0dc29646ed88ffe6d635e34e27407a8519b31ce2c875dc] committed with status (VALID) at localhost:9051
+2026-08-31 22:11:30.514 BST 0003 INFO [chaincodeCmd] chaincodeInvokeOrQuery -> Chaincode invoke successful. result: status:200 
+2026-08-31 22:11:32.610 BST 0001 INFO [chaincodeCmd] ClientWait -> txid [e84393ff4097ca4d92bf2c47fd2349e8a5f5dd22aa58dfe597bf002c991eec06] committed with status (VALID) at localhost:7051
+2026-08-31 22:11:32.613 BST 0002 INFO [chaincodeCmd] ClientWait -> txid [e84393ff4097ca4d92bf2c47fd2349e8a5f5dd22aa58dfe597bf002c991eec06] committed with status (VALID) at localhost:9051
+2026-08-31 22:11:32.613 BST 0003 INFO [chaincodeCmd] chaincodeInvokeOrQuery -> Chaincode invoke successful. result: status:200 
+2026-08-31 22:11:34.702 BST 0001 INFO [chaincodeCmd] ClientWait -> txid [e185c322982f927189441226f7de060f0461c3ab109381707fd58ccf949b38bc] committed with status (VALID) at localhost:9051
+2026-08-31 22:11:34.703 BST 0002 INFO [chaincodeCmd] ClientWait -> txid [e185c322982f927189441226f7de060f0461c3ab109381707fd58ccf949b38bc] committed with status (VALID) at localhost:7051
+2026-08-31 22:11:34.703 BST 0003 INFO [chaincodeCmd] chaincodeInvokeOrQuery -> Chaincode invoke successful. result: status:200 
+2026-08-31 22:11:36.783 BST 0001 INFO [chaincodeCmd] ClientWait -> txid [5f5a4c0ccccfbbad71db803a5af2f22aaad1e47beaf77434dbdc154de426799e] committed with status (VALID) at localhost:7051
+2026-08-31 22:11:36.784 BST 0002 INFO [chaincodeCmd] ClientWait -> txid [5f5a4c0ccccfbbad71db803a5af2f22aaad1e47beaf77434dbdc154de426799e] committed with status (VALID) at localhost:9051
+2026-08-31 22:11:36.784 BST 0003 INFO [chaincodeCmd] chaincodeInvokeOrQuery -> Chaincode invoke successful. result: status:200 
+--- Assemble both into one product, spanning BATCH-OV14-X and BATCH-OV14-Y ---
+2026-08-31 22:11:38.871 BST 0001 INFO [chaincodeCmd] ClientWait -> txid [d1307798f0d4f062b033b86ed2930d46f1bf400817ac1bed1e93ed3b7fa4351a] committed with status (VALID) at localhost:7051
+2026-08-31 22:11:38.872 BST 0002 INFO [chaincodeCmd] ClientWait -> txid [d1307798f0d4f062b033b86ed2930d46f1bf400817ac1bed1e93ed3b7fa4351a] committed with status (VALID) at localhost:9051
+2026-08-31 22:11:38.872 BST 0003 INFO [chaincodeCmd] chaincodeInvokeOrQuery -> Chaincode invoke successful. result: status:200 
+--- TriggerRecall BATCH-OV14-X: opens the product's first campaign ---
+2026-08-31 22:11:40.982 BST 0001 INFO [chaincodeCmd] ClientWait -> txid [0d1f31fe5f37a2e824ba0fcf2b6db9215c59d1f2c4be645a6a2e6eca7a927db0] committed with status (VALID) at localhost:7051
+2026-08-31 22:11:40.982 BST 0002 INFO [chaincodeCmd] ClientWait -> txid [0d1f31fe5f37a2e824ba0fcf2b6db9215c59d1f2c4be645a6a2e6eca7a927db0] committed with status (VALID) at localhost:9051
+2026-08-31 22:11:40.982 BST 0003 INFO [chaincodeCmd] chaincodeInvokeOrQuery -> Chaincode invoke successful. result: status:200 payload:"{\"affectedCount\":2,\"batchId\":\"BATCH-OV14-X\",\"notifiedOwners\":[\"Org1MSP\"],\"txId\":\"0d1f31fe5f37a2e824ba0fcf2b6db9215c59d1f2c4be645a6a2e6eca7a927db0\"}" 
+--- TriggerRecall BATCH-OV14-Y: before v3.5 this would report PRODUCT-OV14 under skippedOverlap and touch nothing; now it opens a SECOND, independent campaign ---
+2026-08-31 22:11:43.064 BST 0001 INFO [chaincodeCmd] ClientWait -> txid [1d87459e37f0d9a060e25a9793b1405f21eea49a6aa1c05594251f91b2788887] committed with status (VALID) at localhost:7051
+2026-08-31 22:11:43.065 BST 0002 INFO [chaincodeCmd] ClientWait -> txid [1d87459e37f0d9a060e25a9793b1405f21eea49a6aa1c05594251f91b2788887] committed with status (VALID) at localhost:9051
+2026-08-31 22:11:43.065 BST 0003 INFO [chaincodeCmd] chaincodeInvokeOrQuery -> Chaincode invoke successful. result: status:200 payload:"{\"affectedCount\":2,\"batchId\":\"BATCH-OV14-Y\",\"notifiedOwners\":[\"Org1MSP\"],\"txId\":\"1d87459e37f0d9a060e25a9793b1405f21eea49a6aa1c05594251f91b2788887\"}" 
+--- GetComponent PRODUCT-OV14: confirm BOTH campaigns are simultaneously open in recallCampaigns ---
+{"docType":"product","tokenId":"PRODUCT-OV14","batchId":"BATCH-OV14-X","componentBatches":["BATCH-OV14-X","BATCH-OV14-Y"],"recipeId":"RECIPE-OV14","status":"ASSEMBLED","recallStatus":"RECALLED","recallCampaigns":[{"batchId":"BATCH-OV14-X","reason":"defect found in batch X","status":"RECALLED","openedAt":"2026-08-31T21:11:38.920384Z"},{"batchId":"BATCH-OV14-Y","reason":"unrelated defect found in batch Y","status":"RECALLED","openedAt":"2026-08-31T21:11:41.028186Z"}],"custodianMsp":"Org1MSP","submittingOrgMspId":"Org1MSP","coAttestingOrgs":["Org1MSP","Org2MSP"],"timestamp":"2026-08-31T21:11:36.827987Z","components":["OV14-X","OV14-Y"]}
+
+############################################################
+### PART B: resolve one campaign without touching the other ###
+############################################################
+--- CloseRecall PRODUCT-OV14 for BATCH-OV14-X only (Regulator, new batchID argument) ---
+2026-08-31 22:11:45.191 BST 0001 INFO [chaincodeCmd] ClientWait -> txid [7406cd89d79a6d6af5505b16788de89054c4ce6de9af469b0f1c172d404c9c42] committed with status (VALID) at localhost:7051
+2026-08-31 22:11:45.191 BST 0002 INFO [chaincodeCmd] ClientWait -> txid [7406cd89d79a6d6af5505b16788de89054c4ce6de9af469b0f1c172d404c9c42] committed with status (VALID) at localhost:9051
+2026-08-31 22:11:45.191 BST 0003 INFO [chaincodeCmd] chaincodeInvokeOrQuery -> Chaincode invoke successful. result: status:200 payload:"{\"batchId\":\"BATCH-OV14-X\",\"campaignStatus\":\"REPAIRED\",\"componentId\":\"PRODUCT-OV14\",\"lifecycleStatus\":\"ASSEMBLED\",\"recallStatus\":\"RECALLED\",\"txId\":\"7406cd89d79a6d6af5505b16788de89054c4ce6de9af469b0f1c172d404c9c42\"}" 
+--- GetComponent PRODUCT-OV14: BATCH-OV14-X now REPAIRED, BATCH-OV14-Y still RECALLED, overall recallStatus still RECALLED ---
+{"docType":"product","tokenId":"PRODUCT-OV14","batchId":"BATCH-OV14-X","componentBatches":["BATCH-OV14-X","BATCH-OV14-Y"],"recipeId":"RECIPE-OV14","status":"ASSEMBLED","recallStatus":"RECALLED","recallCampaigns":[{"batchId":"BATCH-OV14-X","reason":"defect found in batch X","reasonHistory":["CLOSED(REPAIRED): root cause fixed [tx:7406cd89d79a6d6af5505b16788de89054c4ce6de9af469b0f1c172d404c9c42]"],"status":"REPAIRED","openedAt":"2026-08-31T21:11:38.920384Z"},{"batchId":"BATCH-OV14-Y","reason":"unrelated defect found in batch Y","status":"RECALLED","openedAt":"2026-08-31T21:11:41.028186Z"}],"custodianMsp":"Org1MSP","submittingOrgMspId":"Org3MSP","coAttestingOrgs":["Org1MSP","Org3MSP"],"timestamp":"2026-08-31T21:11:36.827987Z","components":["OV14-X","OV14-Y"]}
+--- RevokeRecall BATCH-OV14-Y (Regulator): clears the last open campaign ---
+2026-08-31 22:11:47.332 BST 0001 INFO [chaincodeCmd] ClientWait -> txid [8d3e25269667b761071f463eb3d29a408c61c89e9936d043b93b18e0bec1a189] committed with status (VALID) at localhost:7051
+2026-08-31 22:11:47.332 BST 0002 INFO [chaincodeCmd] ClientWait -> txid [8d3e25269667b761071f463eb3d29a408c61c89e9936d043b93b18e0bec1a189] committed with status (VALID) at localhost:9051
+2026-08-31 22:11:47.333 BST 0003 INFO [chaincodeCmd] chaincodeInvokeOrQuery -> Chaincode invoke successful. result: status:200 payload:"{\"batchId\":\"BATCH-OV14-Y\",\"revokedCount\":2,\"txId\":\"8d3e25269667b761071f463eb3d29a408c61c89e9936d043b93b18e0bec1a189\"}" 
+--- GetComponent PRODUCT-OV14: recallStatus now cleared, but BOTH campaigns' full history remains in recallCampaigns (not deleted) ---
+{"docType":"product","tokenId":"PRODUCT-OV14","batchId":"BATCH-OV14-X","componentBatches":["BATCH-OV14-X","BATCH-OV14-Y"],"recipeId":"RECIPE-OV14","status":"ASSEMBLED","recallCampaigns":[{"batchId":"BATCH-OV14-X","reason":"defect found in batch X","reasonHistory":["CLOSED(REPAIRED): root cause fixed [tx:7406cd89d79a6d6af5505b16788de89054c4ce6de9af469b0f1c172d404c9c42]"],"status":"REPAIRED","openedAt":"2026-08-31T21:11:38.920384Z"},{"batchId":"BATCH-OV14-Y","reason":"unrelated defect found in batch Y","reasonHistory":["REVOKED by Org3MSP: investigation closed, no defect confirmed [tx:8d3e25269667b761071f463eb3d29a408c61c89e9936d043b93b18e0bec1a189] (lifecycle status ASSEMBLED untouched)"],"status":"REVOKED","openedAt":"2026-08-31T21:11:41.028186Z"}],"custodianMsp":"Org1MSP","submittingOrgMspId":"Org3MSP","coAttestingOrgs":["Org1MSP","Org3MSP"],"timestamp":"2026-08-31T21:11:36.827987Z","components":["OV14-X","OV14-Y"]}
+
+=== DONE: Scenario 14 complete. A product recalled under two independent
+=== batches now carries two simultaneously open RecallCampaigns, each
+=== separately closeable and revocable, closing the gap named as a
+=== partial solution throughout this dissertation. ===

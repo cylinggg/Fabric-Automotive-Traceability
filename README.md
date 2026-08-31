@@ -76,8 +76,7 @@ component and after delivery, confirmed by live queries showing
 `custodianMsp` unchanged throughout.
 
 Two gaps stated as untested/unimplemented immediately after v3.3
-shipped were then closed as version 3.4, sequence 9, tagged
-`v3.4-submission` (the final submission tag). First, a record written
+shipped were then closed as version 3.4, sequence 9. First, a record written
 before v3.3 has no `custodianMsp` key at all, so it read back empty;
 `mustGetToken` now falls back to the legacy `owner` key when
 `custodianMsp` is empty, verified against a genuine pre-v3.3 record
@@ -91,11 +90,33 @@ the committed policy requires more, producing a real
 `ENDORSEMENT_POLICY_FAILURE` and no committed state, closing the
 "insufficient peer endorsement... not evaluated" gap stated throughout
 the dissertation. Both are exercised live in
-`evidence/real_fabric_run10_legacy_compatibility.log`. `v2.0-`,
-`v2.1-`, `v2.2-`, `v3.0-`, `v3.1-`, `v3.2-`, and `v3.3-submission` are
-earlier, superseded tags kept for history. See the chaincode's
-top-of-file comments and the evidence log filenames below for the
-exact evidence boundary.
+`evidence/real_fabric_run10_legacy_compatibility.log`.
+
+The overlapping-recall fix evaluated through v3.4 (`RecallBatchID`, a
+single scalar field) was itself always documented as a partial
+solution: it stopped one campaign from silently overwriting another,
+but a second, independent campaign against the same product could only
+ever be reported as `skippedOverlap`, never tracked or resolved.
+Version 3.5, sequence 10, tagged `v3.5-submission` (the final
+submission tag), replaces the scalar with `RecallCampaigns`, a
+one-to-many record: each campaign (`batchId`, `reason`,
+`reasonHistory`, `status`, `openedAt`) is now its own entry, so a
+product recalled under two batches at once carries two simultaneously
+open campaigns, and `CloseRecall`/`ReviseRecallReason`/`RevokeRecall`
+now take an explicit `batchId` identifying which one they act on.
+Exercised live (`evidence/real_fabric_run11_recall_campaigns.log`): a
+product assembled from two batches, recalled under both, both
+campaigns visible simultaneously in `recallCampaigns`, one resolved
+via `CloseRecall` while the other stays open and the token's overall
+`recallStatus` stays `RECALLED`, then the second revoked -- with both
+campaigns' full history retained on the ledger afterwards rather than
+deleted. `mustGetToken` also falls back to synthesising one
+`RecallCampaign` from a pre-v3.5 record's legacy scalar fields, the
+same read-time-compatibility pattern introduced in v3.4 for
+`CustodianMSP`. `v2.0-`, `v2.1-`, `v2.2-`, `v3.0-`, `v3.1-`, `v3.2-`,
+`v3.3-`, and `v3.4-submission` are earlier, superseded tags kept for
+history. See the chaincode's top-of-file comments and the evidence log
+filenames below for the exact evidence boundary.
 
 ## What is actually in this repo
 
@@ -351,10 +372,10 @@ is no longer sufficient for them.
 | `RecordUsageLog` | Implicit majority | OEM org + `OU=admin` | ≥2 co-attesting orgs declared; status `DELIVERED`; not currently RECALLED | Attach field telemetry to a token; OEM admin is a test-network relay for the undeployed dealer/service-centre identity, not the recommended production role |
 | `WarrantyCheck` | N/A (query) | None | None | Apply a threshold rule to usage data |
 | `ProvenanceCheck` (formerly `CounterfeitScan`) | N/A (query) | None | None | Verify ledger registration + declared co-attestation count (`REGISTERED_WITH_DECLARED_PARTICIPANTS`, not physical authenticity — renamed from `REGISTERED_WITH_SUFFICIENT_ATTESTATION` in v3.0) |
-| `TriggerRecall` | Implicit majority | OEM or Regulator org + `OU=admin` | None beyond caller check | Batch-level recall via composite-key index; sets `recallStatus` and `recallBatchId` (never touches lifecycle `status`); single aggregated event; a product is found via *any* of its constituent batches; a token already recalled under a *different* batch is reported as `skippedOverlap`, not relabelled |
-| `CloseRecall` | Implicit majority | OEM or Regulator org + `OU=admin` | ≥2 co-attesting orgs declared; `recallStatus` = `RECALLED` | Resolve a recalled token's `recallStatus` to `REPAIRED`/`REPLACED`/`RETIRED`; lifecycle `status` is left untouched |
-| `ReviseRecallReason` | Implicit majority | OEM or Regulator org + `OU=admin` | Token's `recallBatchId` must match the named batch | Append an amendment to a batch's recall reason, restricted to tokens whose `recallBatchId` matches that batch, without overwriting it |
-| `RevokeRecall` | Implicit majority | Regulator org + `OU=admin` | Token's `recallBatchId` must match the named batch | Clear `recallStatus`/`recallBatchId` back to empty for tokens whose `recallBatchId` matches the named batch only, restoring visibility of whatever lifecycle `status` the token actually had; a token still recalled under a *different* batch is left untouched (v2.1 fix — v2.0 could incorrectly clear it) |
+| `TriggerRecall` | Implicit majority | OEM or Regulator org + `OU=admin` | None beyond caller check | Batch-level recall via composite-key index; opens a new entry in `recallCampaigns` for this batch (never touches lifecycle `status`); single aggregated event; a product is found via *any* of its constituent batches; as of v3.5/sequence 10, a token already recalled under a *different* batch gets its OWN independent, simultaneously-open campaign instead of being skipped (pre-v3.5: reported as `skippedOverlap`, not tracked at all) |
+| `CloseRecall` | Implicit majority | OEM or Regulator org + `OU=admin` | ≥2 co-attesting orgs declared; token has an open `recallCampaigns` entry for the given `batchId` | As of v3.5/sequence 10, takes an explicit `batchId` argument (`componentId, batchId, resolution, note, coAttestingOrgsCSV`) and resolves only that campaign to `REPAIRED`/`REPLACED`/`RETIRED`, leaving any other open campaign on the same token untouched; lifecycle `status` is left untouched |
+| `ReviseRecallReason` | Implicit majority | OEM or Regulator org + `OU=admin` | Token must have an open `recallCampaigns` entry for the named batch | Append an amendment to that one campaign's `reasonHistory`, without overwriting the original reason or touching any other open campaign on the same token |
+| `RevokeRecall` | Implicit majority | Regulator org + `OU=admin` | Token must have an open `recallCampaigns` entry for the named batch | Mark that one campaign `REVOKED` (its full record, including `batchId`/`reason`/`reasonHistory`, stays on the ledger rather than being cleared), restoring visibility of whatever lifecycle `status` the token actually had once no campaign remains open; a token still recalled under a *different*, independent batch is left untouched (v2.1 fix — v2.0 could incorrectly clear it; v3.5 extends this to genuinely simultaneous campaigns rather than only sequential ones) |
 | `GetHistory` | N/A (query) | None | None | Return the full on-chain version history of a token via `GetHistoryForKey` |
 
 Every write function above that operates on an existing token also rejects

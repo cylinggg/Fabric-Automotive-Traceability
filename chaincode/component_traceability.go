@@ -135,6 +135,33 @@ import (
 //	    three-organisation network against a genuine pre-v3.3 record still
 //	    on the real ledger (evidence/real_fabric_run10_legacy_compatibility.log;
 //	    Scenario 13).
+//	3.5 (sequence 10): RecallCampaigns replaces the scalar RecallBatchID/
+//	    Reason/ReasonHistory fields with a one-to-many record, closing the
+//	    overlapping-recall gap named explicitly in supervisor review and
+//	    already flagged as a partial solution throughout this dissertation.
+//	    Before this version, a token recalled under a second, independent
+//	    batch could not have that second campaign tracked at all -- it was
+//	    reported only as skippedOverlap and silently dropped otherwise. Each
+//	    RecallCampaign is now its own record (BatchID, Reason,
+//	    ReasonHistory, Status, OpenedAt), so a token can carry more than one
+//	    simultaneously open campaign, and CloseRecall/ReviseRecallReason/
+//	    RevokeRecall now take an explicit batchID identifying which campaign
+//	    they act on, rather than assuming a token has only one. The derived
+//	    RecallStatus field is retained (RECALLED if any campaign is open,
+//	    else "") so requireNotRecalled and ProvenanceCheck's single-field
+//	    read need no change. skippedOverlap is removed from TriggerRecall's
+//	    response: a second batch's campaign is now genuinely opened, not
+//	    skipped. mustGetToken falls back to synthesising one RecallCampaign
+//	    from the legacy scalar fields when RecallCampaigns is empty but a
+//	    legacy RecallBatchID is present, the same pattern introduced in
+//	    v3.4 for CustodianMSP, except this one is naturally written forward
+//	    on the record's next recall-mutating call rather than staying
+//	    read-only, since CloseRecall/ReviseRecallReason/RevokeRecall write
+//	    through RecallCampaigns directly. Unit-tested (new cases proving two
+//	    independent campaigns on one token, independent closure/revocation,
+//	    and the legacy-campaign fallback) and exercised live on the same
+//	    three-organisation network (evidence/real_fabric_run11_recall_campaigns.log;
+//	    Scenario 14).
 type SmartContract struct {
 	contractapi.Contract
 }
@@ -172,6 +199,19 @@ type SmartContract struct {
 //     (was it DELIVERED? still ASSEMBLED?). Keeping the two fields apart
 //     means a recall can be triggered, resolved, or revoked without ever
 //     touching the lifecycle history the rest of the system depends on.
+//     RecallStatus itself is now a *derived* summary (see
+//     recomputeRecallStatus): RECALLED if any entry in RecallCampaigns is
+//     currently open, else "". The authoritative record of who did what,
+//     under which batch, is RecallCampaigns, not RecallStatus.
+//   - RecallCampaigns replaces a pre-v3.5 design that stored only one
+//     scalar RecallBatchID/Reason/ReasonHistory set per token, so a second,
+//     independent recall campaign against the same token (a product
+//     indexed under two batches, Section 3.3) had nowhere to be recorded
+//     and was only ever reported as skippedOverlap. Each RecallCampaign is
+//     its own record, so two campaigns against one token now coexist and
+//     are independently closeable (CloseRecall), amendable
+//     (ReviseRecallReason), and revocable (RevokeRecall), each identified
+//     by its own BatchID rather than assumed to be the token's only one.
 //   - CustodianMSP, InstalledInProductID, and DealerID were previously one
 //     overloaded field (Owner), which held a real MSP identity right after
 //     registration, then a productID once a component was assembled
@@ -220,9 +260,9 @@ type ComponentToken struct {
 	BatchID          string              `json:"batchId"`                    // component: its one batch; product: its lowest-sorted constituent batch, see ComponentBatches
 	ComponentBatches []string            `json:"componentBatches,omitempty"` // product tokens only: every distinct batch among the assembled components (see RecordAssembly)
 	RecipeID         string              `json:"recipeId,omitempty"`
-	Status           string              `json:"status"`                  // lifecycle only: MANUFACTURED, QC_PASSED, SHIPPED, ASSEMBLED, DELIVERED (never RECALLED; see RecallStatus)
-	RecallStatus     string              `json:"recallStatus,omitempty"`  // "" (never recalled), RECALLED, or a CloseRecall resolution (REPAIRED, REPLACED, RETIRED); independent of Status
-	RecallBatchID    string              `json:"recallBatchId,omitempty"` // which batch's TriggerRecall call set the current RecallStatus; see the cross-batch overlap note on TriggerRecall
+	Status           string              `json:"status"`                 // lifecycle only: MANUFACTURED, QC_PASSED, SHIPPED, ASSEMBLED, DELIVERED (never RECALLED; see RecallStatus)
+	RecallStatus     string              `json:"recallStatus,omitempty"` // DERIVED: "" or RECALLED, recomputed from RecallCampaigns by recomputeRecallStatus after every campaign mutation; independent of Status
+	RecallCampaigns  []RecallCampaign    `json:"recallCampaigns,omitempty"` // v3.5: one-to-many replacement for the pre-v3.5 scalar recall fields below, allowing independently-managed overlapping campaigns (see type doc comment)
 	CustodianMSP         string `json:"custodianMsp"`                   // authenticated MSP currently accountable for this token; always one of this network's real, deployed organisations (see requireCallerIsCustodian). Never overwritten with a productID or dealerID -- see InstalledInProductID and DealerID below.
 	InstalledInProductID string `json:"installedInProductId,omitempty"` // set once a component has been assembled into a product (RecordAssembly); the component's own CustodianMSP is left unchanged, so ownership checks on it continue to work after assembly
 	DealerID             string `json:"dealerId,omitempty"`             // caller-supplied business identifier for the delivery destination (RecordDelivery); NOT an MSP and never compared against a caller's authenticated identity -- CustodianMSP is deliberately left unchanged on delivery so it remains a real, checkable identity
@@ -231,10 +271,31 @@ type ComponentToken struct {
 	SubmittingOrgMSP string              `json:"submittingOrgMspId"` // cryptographically verified by Fabric for this transaction
 	CoAttestingOrgs  []string            `json:"coAttestingOrgs"`    // self-declared, not independently verified (see type doc comment)
 	Timestamp        time.Time           `json:"timestamp"`          // from ctx.GetStub().GetTxTimestamp(), not time.Now()
-	Reason           string              `json:"reason,omitempty"`   // original recall reason, never overwritten
-	ReasonHistory    []string            `json:"reasonHistory,omitempty"`
 	Components       []string            `json:"components,omitempty"` // for assembled product tokens
 	UsageAvgTempC    *float64            `json:"usageAvgTempC,omitempty"`
+
+	// Pre-v3.5 scalar recall fields, retained only so a legacy record still
+	// decodes and can be recovered by mustGetToken's read-time fallback into
+	// RecallCampaigns (see the v3.5 changelog entry above). New code never
+	// writes these three fields.
+	RecallBatchID string   `json:"recallBatchId,omitempty"`
+	Reason        string   `json:"reason,omitempty"`
+	ReasonHistory []string `json:"reasonHistory,omitempty"`
+}
+
+// RecallCampaign records one independently-managed recall campaign against a
+// token, identified by the batch that opened it. Introduced in v3.5 to
+// replace a single scalar RecallBatchID/Reason/ReasonHistory set per token,
+// which meant a second, genuinely independent campaign against the same
+// token (a product indexed under two batches, Section 3.3) could not be
+// tracked at all -- see the type doc comment on ComponentToken and the v3.5
+// changelog entry.
+type RecallCampaign struct {
+	BatchID       string    `json:"batchId"`
+	Reason        string    `json:"reason"`             // original reason, never overwritten; amendments go to ReasonHistory
+	ReasonHistory []string  `json:"reasonHistory,omitempty"`
+	Status        string    `json:"status"`   // RECALLED (open), or a terminal value: REPAIRED, REPLACED, RETIRED (via CloseRecall), or REVOKED (via RevokeRecall)
+	OpenedAt      time.Time `json:"openedAt"` // ctx.GetStub().GetTxTimestamp() at TriggerRecall, not time.Now()
 }
 
 const (
@@ -942,15 +1003,18 @@ func (s *SmartContract) ProvenanceCheck(ctx contractapi.TransactionContextInterf
 // themselves are ordinary ledger keys subject to normal MVCC read-set
 // tracking.
 //
-// Cross-batch overlap: a product can be indexed under more than one batch
-// (Section 3.3 / RecordAssembly). If that product is already RECALLED under
-// a different batch's still-open campaign, this call does not overwrite
-// that campaign's RecallBatchID (which would let a later RevokeRecall for
-// batchID incorrectly clear a recall it never actually caused, described in
-// the ComponentToken doc comment). Such tokens are left untouched and
-// listed separately in the response as skippedOverlap, rather than silently
-// merged into this batch's campaign or silently left out of the response
-// entirely.
+// Overlapping campaigns: a product can be indexed under more than one batch
+// (Section 3.3 / RecordAssembly). Before v3.5, a token already RECALLED
+// under a different batch's still-open campaign could not have a second
+// campaign tracked at all; this call only reported it as skippedOverlap and
+// otherwise ignored it. As of v3.5, a genuinely different batchID opens its
+// own independent RecallCampaign on the token, coexisting with any other
+// open campaign, each later closeable/revocable/amendable on its own via
+// its own batchID (CloseRecall/ReviseRecallReason/RevokeRecall). The only
+// remaining no-op case is re-triggering the *same* batchID while its
+// campaign is already open, which stays idempotent (openCampaignFor finds
+// it and this call skips it without duplicating the campaign or resetting
+// its OpenedAt/Reason).
 func (s *SmartContract) TriggerRecall(ctx contractapi.TransactionContextInterface, batchID string, reason string) (string, error) {
 	callerMSP, err := ctx.GetClientIdentity().GetMSPID()
 	if err != nil {
@@ -971,28 +1035,33 @@ func (s *SmartContract) TriggerRecall(ctx contractapi.TransactionContextInterfac
 		return "", fmt.Errorf("triggerRecall rejected: no components found for batch %s", batchID)
 	}
 
+	txID := ctx.GetStub().GetTxID()
+	openedAt, err := txTimestamp(ctx)
+	if err != nil {
+		return "", err
+	}
+
 	affected := 0
 	recalledIDs := make([]string, 0, len(componentIDs))
-	skippedOverlap := make([]string, 0)
 	ownerSet := map[string]bool{}
 	for _, tokenID := range componentIDs {
 		token, err := s.mustGetToken(ctx, tokenID)
 		if err != nil {
 			return "", err
 		}
-		if token.RecallStatus == "RECALLED" {
-			if token.RecallBatchID != batchID {
-				// Already under a different batch's open campaign: leave it
-				// alone rather than relabelling it as this batch's, which
-				// would make a later RevokeRecall(batchID) incorrectly
-				// clear a recall this call never actually caused.
-				skippedOverlap = append(skippedOverlap, tokenID)
-			}
+		if openCampaignFor(token, batchID) != nil {
+			// This exact batch already has an open campaign on this token:
+			// idempotent no-op, matching the pre-v3.5 repeated-recall
+			// behaviour (Table 6's "Repeated recall / idempotency" case).
 			continue
 		}
-		token.RecallStatus = "RECALLED"
-		token.RecallBatchID = batchID
-		token.Reason = reason
+		token.RecallCampaigns = append(token.RecallCampaigns, RecallCampaign{
+			BatchID:  batchID,
+			Reason:   reason,
+			Status:   "RECALLED",
+			OpenedAt: openedAt,
+		})
+		recomputeRecallStatus(token)
 		if err := s.putToken(ctx, token, ""); err != nil {
 			return "", err
 		}
@@ -1017,9 +1086,7 @@ func (s *SmartContract) TriggerRecall(ctx contractapi.TransactionContextInterfac
 	}
 	sort.Strings(owners)
 	sort.Strings(recalledIDs)
-	sort.Strings(skippedOverlap)
 
-	txID := ctx.GetStub().GetTxID()
 	// Exactly one SetEvent call for the whole transaction: Fabric only
 	// carries a single chaincode event per transaction, so calling
 	// SetEvent once per token inside the loop above (as an earlier version
@@ -1031,7 +1098,6 @@ func (s *SmartContract) TriggerRecall(ctx contractapi.TransactionContextInterfac
 		"batchId":        batchID,
 		"affectedCount":  affected,
 		"recalledTokens": recalledIDs,
-		"skippedOverlap": skippedOverlap,
 		"notifiedOwners": owners,
 		"txId":           txID,
 	})
@@ -1042,33 +1108,65 @@ func (s *SmartContract) TriggerRecall(ctx contractapi.TransactionContextInterfac
 	out, _ := json.Marshal(map[string]interface{}{
 		"batchId":        batchID,
 		"affectedCount":  affected,
-		"skippedOverlap": skippedOverlap,
 		"notifiedOwners": owners,
 		"txId":           txID,
 	})
 	return string(out), nil
 }
 
-// CloseRecall moves a single component from RECALLED to a terminal
-// resolution state (REPAIRED, REPLACED, or RETIRED). This resolution is
-// recorded in RecallStatus, not Status: the component's lifecycle status
-// (e.g. DELIVERED) is left exactly as it was, since a recall and its
-// resolution are events layered on top of the lifecycle, not replacements
-// for it. The original recall Reason is also left untouched; the resolution
-// is appended to ReasonHistory so the full timeline stays on the ledger
-// instead of being overwritten.
+// openCampaignFor returns the currently open (Status == RECALLED) campaign
+// for batchID on this token, if any. An earlier, already-closed or revoked
+// campaign for the same batchID (from a prior TriggerRecall/CloseRecall/
+// RevokeRecall cycle) is left in RecallCampaigns as history and is not
+// returned, so a fresh TriggerRecall for that batchID opens a new campaign
+// entry rather than resurrecting the old one.
+func openCampaignFor(token *ComponentToken, batchID string) *RecallCampaign {
+	for i := range token.RecallCampaigns {
+		if token.RecallCampaigns[i].BatchID == batchID && token.RecallCampaigns[i].Status == "RECALLED" {
+			return &token.RecallCampaigns[i]
+		}
+	}
+	return nil
+}
+
+// recomputeRecallStatus keeps the derived ComponentToken.RecallStatus field
+// in sync with RecallCampaigns: RECALLED if any campaign is currently open,
+// else "". Must be called after any function that mutates RecallCampaigns,
+// so requireNotRecalled and ProvenanceCheck's single-field read stay
+// correct without themselves inspecting the campaigns array.
+func recomputeRecallStatus(token *ComponentToken) {
+	for _, c := range token.RecallCampaigns {
+		if c.Status == "RECALLED" {
+			token.RecallStatus = "RECALLED"
+			return
+		}
+	}
+	token.RecallStatus = ""
+}
+
+// CloseRecall moves one token's campaign for batchID from RECALLED to a
+// terminal resolution state (REPAIRED, REPLACED, or RETIRED). This
+// resolution is recorded on that campaign, not on Status: the component's
+// lifecycle status (e.g. DELIVERED) is left exactly as it was, since a
+// recall and its resolution are events layered on top of the lifecycle, not
+// replacements for it. The campaign's original Reason is left untouched;
+// the resolution is appended to that campaign's own ReasonHistory. Since
+// v3.5, batchID identifies which of a token's possibly several open
+// campaigns this call resolves; a token with two independent open campaigns
+// requires two separate CloseRecall calls, one per batchID.
 //
 // Restricted to OEM or Regulator, matching ReviseRecallReason and
 // RevokeRecall: an earlier version had no caller-role check at all, so any
 // enrolled participant, including one with no relationship to the recalled
 // token, could resolve a safety recall.
-func (s *SmartContract) CloseRecall(ctx contractapi.TransactionContextInterface, componentID string, resolution string, note string, coAttestingOrgsCSV string) (string, error) {
+func (s *SmartContract) CloseRecall(ctx contractapi.TransactionContextInterface, componentID string, batchID string, resolution string, note string, coAttestingOrgsCSV string) (string, error) {
 	token, err := s.mustGetToken(ctx, componentID)
 	if err != nil {
 		return "", err
 	}
-	if token.RecallStatus != "RECALLED" {
-		return "", fmt.Errorf("closeRecall rejected: token %s is not currently RECALLED (recall status %q)", componentID, token.RecallStatus)
+	campaign := openCampaignFor(token, batchID)
+	if campaign == nil {
+		return "", fmt.Errorf("closeRecall rejected: token %s has no open recall campaign for batch %s", componentID, batchID)
 	}
 	if _, err := requireCallerIs(ctx, oemOrgMSP, regulatorOrgMSP); err != nil {
 		return "", fmt.Errorf("closeRecall rejected: %v", err)
@@ -1088,19 +1186,23 @@ func (s *SmartContract) CloseRecall(ctx contractapi.TransactionContextInterface,
 	}
 
 	txID := ctx.GetStub().GetTxID()
-	token.RecallStatus = resolution
+	campaign.Status = resolution
+	campaign.ReasonHistory = append(campaign.ReasonHistory, fmt.Sprintf("CLOSED(%s): %s [tx:%s]", resolution, note, txID))
+	recomputeRecallStatus(token)
 	token.SubmittingOrgMSP = callerMSP
 	token.CoAttestingOrgs = coAttestors
-	token.ReasonHistory = append(token.ReasonHistory, fmt.Sprintf("CLOSED(%s): %s [tx:%s]", resolution, note, txID))
 	if err := s.putToken(ctx, token, "RecallClosed"); err != nil {
 		return "", err
 	}
-	out, _ := json.Marshal(map[string]interface{}{"componentId": componentID, "lifecycleStatus": token.Status, "recallStatus": resolution, "txId": txID})
+	out, _ := json.Marshal(map[string]interface{}{"componentId": componentID, "batchId": batchID, "lifecycleStatus": token.Status, "recallStatus": token.RecallStatus, "campaignStatus": resolution, "txId": txID})
 	return string(out), nil
 }
 
-// ReviseRecallReason appends an amendment to every RECALLED token in a batch
-// without overwriting the original reason text. OEM or Regulator only.
+// ReviseRecallReason appends an amendment to a batch's open campaign on
+// every token in it, without overwriting the original reason text. OEM or
+// Regulator only. Since v3.5 this targets each token's campaign object
+// (openCampaignFor), leaving any other, independent open campaign on the
+// same token (a different batchID) untouched.
 func (s *SmartContract) ReviseRecallReason(ctx contractapi.TransactionContextInterface, batchID string, amendedReason string) (string, error) {
 	callerMSP, err := ctx.GetClientIdentity().GetMSPID()
 	if err != nil {
@@ -1124,13 +1226,15 @@ func (s *SmartContract) ReviseRecallReason(ctx contractapi.TransactionContextInt
 		if err != nil {
 			return "", err
 		}
-		if token.RecallStatus != "RECALLED" || token.RecallBatchID != batchID {
-			// Not currently recalled, or recalled under a different batch's
-			// campaign: this batch's amendment must not touch it (see the
-			// cross-batch overlap note on TriggerRecall).
+		campaign := openCampaignFor(token, batchID)
+		if campaign == nil {
+			// No open campaign for this exact batchID on this token: either
+			// never recalled under it, or that campaign already closed/
+			// revoked. Any other, independent open campaign on the same
+			// token (a different batchID) is left untouched either way.
 			continue
 		}
-		token.ReasonHistory = append(token.ReasonHistory, fmt.Sprintf("AMENDED by %s: %s [tx:%s]", callerMSP, amendedReason, txID))
+		campaign.ReasonHistory = append(campaign.ReasonHistory, fmt.Sprintf("AMENDED by %s: %s [tx:%s]", callerMSP, amendedReason, txID))
 		if err := s.putToken(ctx, token, ""); err != nil {
 			return "", err
 		}
@@ -1143,30 +1247,30 @@ func (s *SmartContract) ReviseRecallReason(ctx contractapi.TransactionContextInt
 	return string(out), nil
 }
 
-// RevokeRecall clears RecallStatus on every token whose RecallBatchID
-// matches batchID, restoring visibility of whatever lifecycle status
-// (Status) the token actually had, since that field was never touched by
-// TriggerRecall in the first place. An earlier version of this chaincode
-// instead overwrote Status with a generic ACTIVE value on revocation,
-// silently destroying the information that the token had, for example,
-// already been DELIVERED before the recall; this version cannot lose that
-// information because recall and lifecycle are tracked in separate fields.
+// RevokeRecall marks REVOKED the campaign matching batchID on every token
+// reachable from batchID's index entries, restoring visibility of whatever
+// lifecycle status (Status) the token actually had, since that field was
+// never touched by TriggerRecall in the first place. An earlier version of
+// this chaincode instead overwrote Status with a generic ACTIVE value on
+// revocation, silently destroying the information that the token had, for
+// example, already been DELIVERED before the recall; this version cannot
+// lose that information because recall and lifecycle are tracked in
+// separate fields.
 //
-// The RecallBatchID check matters independently of that fix: a product can
-// be indexed under more than one batch (Section 3.3). Before RecallBatchID
-// existed, RevokeRecall(batchID) cleared RecallStatus on every RECALLED
-// token reachable from batchID's index entries, including a product that
-// was actually still under a different, unrelated batch's open recall
-// campaign, silently clearing a recall this call had no authority over.
-// Restricting the clear to tokens whose RecallBatchID equals batchID fixes
-// that: a token recalled under a different batch is left untouched, exactly
-// as TriggerRecall itself already declines to relabel it (see its own doc
-// comment).
+// The batchID match matters independently of that fix: a product can be
+// indexed under more than one batch (Section 3.3), and since v3.5 may carry
+// more than one simultaneously open campaign. Revoking batchID must not
+// affect a different, independent campaign on the same token; openCampaignFor
+// scopes the revocation to the one campaign whose BatchID matches. Unlike
+// pre-v3.5, which cleared RecallBatchID and so lost the record of which
+// batch had been revoked, the campaign object itself is kept (marked
+// REVOKED, not deleted), so its BatchID, Reason, and full ReasonHistory
+// remain on the ledger rather than only in a free-text ReasonHistory entry.
 //
 // This function is deliberately restricted to RegulatorMSP only (not the
 // OEM), so the OEM cannot unilaterally cancel its own recall. The fact that
-// a recall happened and was later revoked stays visible via ReasonHistory
-// and GetHistory().
+// a recall happened and was later revoked stays visible via the campaign's
+// own ReasonHistory, RecallCampaigns, and GetHistory().
 func (s *SmartContract) RevokeRecall(ctx contractapi.TransactionContextInterface, batchID string, justification string) (string, error) {
 	callerMSP, err := ctx.GetClientIdentity().GetMSPID()
 	if err != nil {
@@ -1190,16 +1294,17 @@ func (s *SmartContract) RevokeRecall(ctx contractapi.TransactionContextInterface
 		if err != nil {
 			return "", err
 		}
-		if token.RecallStatus != "RECALLED" || token.RecallBatchID != batchID {
-			// Not currently recalled, or recalled under a different batch's
-			// still-open campaign: revoking batchID must not clear a recall
-			// this call has no authority over (see the type doc comment for
-			// RecallBatchID and TriggerRecall's cross-batch overlap note).
+		campaign := openCampaignFor(token, batchID)
+		if campaign == nil {
+			// No open campaign for this exact batchID: never recalled under
+			// it, already resolved/revoked, or only recalled under a
+			// different, independent campaign that this call has no
+			// authority over (see the doc comment above).
 			continue
 		}
-		token.RecallStatus = ""
-		token.RecallBatchID = ""
-		token.ReasonHistory = append(token.ReasonHistory, fmt.Sprintf("REVOKED by %s: %s [tx:%s] (lifecycle status %s untouched)", callerMSP, justification, txID, token.Status))
+		campaign.Status = "REVOKED"
+		campaign.ReasonHistory = append(campaign.ReasonHistory, fmt.Sprintf("REVOKED by %s: %s [tx:%s] (lifecycle status %s untouched)", callerMSP, justification, txID, token.Status))
+		recomputeRecallStatus(token)
 		if err := s.putToken(ctx, token, ""); err != nil {
 			return "", err
 		}
@@ -1346,6 +1451,26 @@ func (s *SmartContract) mustGetToken(ctx contractapi.TransactionContextInterface
 		if err := json.Unmarshal(bytes, &legacy); err == nil && legacy.Owner != "" {
 			token.CustodianMSP = legacy.Owner
 		}
+	}
+	if len(token.RecallCampaigns) == 0 && token.RecallBatchID != "" {
+		// A record written before v3.5 has no "recallCampaigns" key at all,
+		// so a legacy record still carrying a scalar RecallBatchID (i.e.
+		// currently RECALLED or resolved-but-not-revoked -- a revoked
+		// legacy record already had RecallBatchID cleared by the old
+		// RevokeRecall) would otherwise appear to have no campaign history
+		// at all. Synthesise one RecallCampaign from the legacy scalar
+		// fields (Reason, ReasonHistory, RecallBatchID, RecallStatus)
+		// instead. Unlike the CustodianMSP fallback above, this is not
+		// purely read-time: CloseRecall/ReviseRecallReason/RevokeRecall all
+		// write RecallCampaigns back through putToken, so the very next
+		// recall-mutating call against this token naturally carries the
+		// synthesised campaign forward onto the ledger.
+		token.RecallCampaigns = []RecallCampaign{{
+			BatchID:       token.RecallBatchID,
+			Reason:        token.Reason,
+			ReasonHistory: token.ReasonHistory,
+			Status:        token.RecallStatus,
+		}}
 	}
 	return &token, nil
 }

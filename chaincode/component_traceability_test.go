@@ -565,11 +565,13 @@ func TestTriggerRecall_UnknownBatchRejectedNotSilentZero(t *testing.T) {
 	}
 }
 
-// --- cross-batch overlapping recall campaigns (a product recalled under two
-// different batches at once must not let revoking one campaign clear the
-// other) ---
+// --- cross-batch overlapping recall campaigns (v3.5: a product recalled
+// under two different batches at once now gets two independent
+// RecallCampaigns, each separately closeable/revocable, rather than the
+// pre-v3.5 design where the second campaign was only ever reported as
+// skippedOverlap and otherwise dropped) ---
 
-func TestTriggerRecall_OverlappingCampaignDoesNotRelabelToken(t *testing.T) {
+func TestTriggerRecall_OverlappingCampaignsBothOpenIndependently(t *testing.T) {
 	s := &SmartContract{}
 	stub := newFakeStub("tx1")
 	ctx := &fakeCtx{stub: stub, callerID: oemOrgMSP}
@@ -589,29 +591,35 @@ func TestTriggerRecall_OverlappingCampaignDoesNotRelabelToken(t *testing.T) {
 		t.Fatalf("first TriggerRecall should have affected at least the product, got: %s", out)
 	}
 	product, err := s.mustGetToken(ctx, "PRODUCT-OV")
-	if err != nil || product.RecallBatchID != "BATCH-OV-X" {
-		t.Fatalf("expected product.RecallBatchID = BATCH-OV-X after first campaign, got %q (err=%v)", product.RecallBatchID, err)
+	if err != nil || openCampaignFor(product, "BATCH-OV-X") == nil {
+		t.Fatalf("expected an open BATCH-OV-X campaign on the product after the first TriggerRecall (err=%v)", err)
 	}
 
 	// Second, independent campaign: BATCH-OV-Y also names the same product
-	// (it is a shared member of both batches). This must NOT relabel the
-	// product's RecallBatchID to BATCH-OV-Y, and must report it as an
-	// overlap rather than silently absorbing it into the new campaign.
+	// (it is a shared member of both batches). Since v3.5 this must open its
+	// OWN campaign rather than being skipped: both BATCH-OV-X and
+	// BATCH-OV-Y are now simultaneously open on the same token.
 	out2, err := s.TriggerRecall(ctx, "BATCH-OV-Y", "unrelated defect found in batch Y")
 	if err != nil {
 		t.Fatalf("second TriggerRecall failed: %v", err)
 	}
-	if !strings.Contains(out2, "PRODUCT-OV") {
-		t.Fatalf("second TriggerRecall response should list PRODUCT-OV under skippedOverlap, got: %s", out2)
+	if strings.Contains(out2, `"affectedCount":0`) {
+		t.Fatalf("second TriggerRecall should have opened its own campaign on the shared product, got: %s", out2)
 	}
 	product, err = s.mustGetToken(ctx, "PRODUCT-OV")
-	if err != nil || product.RecallBatchID != "BATCH-OV-X" {
-		t.Fatalf("product.RecallBatchID should still be BATCH-OV-X after the overlapping second campaign, got %q (err=%v)", product.RecallBatchID, err)
+	if err != nil {
+		t.Fatalf("failed to read back product: %v", err)
+	}
+	if openCampaignFor(product, "BATCH-OV-X") == nil || openCampaignFor(product, "BATCH-OV-Y") == nil {
+		t.Fatalf("expected BOTH BATCH-OV-X and BATCH-OV-Y campaigns open simultaneously on the product, got RecallCampaigns: %+v", product.RecallCampaigns)
+	}
+	if len(product.RecallCampaigns) != 2 {
+		t.Fatalf("expected exactly 2 RecallCampaigns on the product, got %d: %+v", len(product.RecallCampaigns), product.RecallCampaigns)
 	}
 
-	// The critical fix: revoking BATCH-OV-Y (the campaign that never
-	// actually owned this token) must NOT clear the product's real,
-	// still-open BATCH-OV-X recall.
+	// The core fix under test: revoking BATCH-OV-Y must not clear the
+	// product's still-open BATCH-OV-X recall, and the product must remain
+	// RECALLED overall (RecallStatus derived from the still-open campaign).
 	regCtx := &fakeCtx{stub: stub, callerID: regulatorOrgMSP}
 	if _, err := s.RevokeRecall(regCtx, "BATCH-OV-Y", "closing out batch Y investigation"); err != nil {
 		t.Fatalf("RevokeRecall(BATCH-OV-Y) failed: %v", err)
@@ -620,17 +628,60 @@ func TestTriggerRecall_OverlappingCampaignDoesNotRelabelToken(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to read back product: %v", err)
 	}
-	if product.RecallStatus != "RECALLED" || product.RecallBatchID != "BATCH-OV-X" {
-		t.Fatalf("revoking BATCH-OV-Y must not clear the unrelated BATCH-OV-X recall; got RecallStatus=%q RecallBatchID=%q (this is exactly the cross-batch bug being tested)", product.RecallStatus, product.RecallBatchID)
+	if product.RecallStatus != "RECALLED" || openCampaignFor(product, "BATCH-OV-X") == nil {
+		t.Fatalf("revoking BATCH-OV-Y must not clear the unrelated, still-open BATCH-OV-X recall; got RecallStatus=%q RecallCampaigns=%+v", product.RecallStatus, product.RecallCampaigns)
+	}
+	if openCampaignFor(product, "BATCH-OV-Y") != nil {
+		t.Fatalf("BATCH-OV-Y campaign should no longer be open after RevokeRecall")
 	}
 
-	// Revoking the correct batch (BATCH-OV-X) does clear it.
+	// Revoking the correct batch (BATCH-OV-X) does clear the overall
+	// RecallStatus, since no campaign remains open, but both campaigns'
+	// full history (BatchID, Reason, REVOKED entries) stays on the ledger
+	// in RecallCampaigns rather than being deleted.
 	if _, err := s.RevokeRecall(regCtx, "BATCH-OV-X", "root cause resolved"); err != nil {
 		t.Fatalf("RevokeRecall(BATCH-OV-X) failed: %v", err)
 	}
 	product, err = s.mustGetToken(ctx, "PRODUCT-OV")
-	if err != nil || product.RecallStatus != "" || product.RecallBatchID != "" {
-		t.Fatalf("revoking the owning batch (BATCH-OV-X) should clear RecallStatus and RecallBatchID, got RecallStatus=%q RecallBatchID=%q (err=%v)", product.RecallStatus, product.RecallBatchID, err)
+	if err != nil || product.RecallStatus != "" {
+		t.Fatalf("revoking the last open batch (BATCH-OV-X) should clear derived RecallStatus, got RecallStatus=%q (err=%v)", product.RecallStatus, err)
+	}
+	if len(product.RecallCampaigns) != 2 {
+		t.Fatalf("both campaigns' history should remain on the ledger after revocation, got %d entries: %+v", len(product.RecallCampaigns), product.RecallCampaigns)
+	}
+}
+
+func TestTriggerRecall_SameBatchReTriggerIsIdempotent(t *testing.T) {
+	s := &SmartContract{}
+	stub := newFakeStub("tx1")
+	ctx := &fakeCtx{stub: stub, callerID: oemOrgMSP}
+
+	if err := s.RegisterComponent(ctx, "COMP-IDEM1", "BATCH-IDEM", "Tier2Supplier", reportHash("r"), "Org2MSP"); err != nil {
+		t.Fatalf("setup registration failed: %v", err)
+	}
+	if _, err := s.TriggerRecall(ctx, "BATCH-IDEM", "first trigger"); err != nil {
+		t.Fatalf("first TriggerRecall failed: %v", err)
+	}
+	before, err := s.mustGetToken(ctx, "COMP-IDEM1")
+	if err != nil || len(before.RecallCampaigns) != 1 {
+		t.Fatalf("expected exactly 1 campaign after first trigger, got %+v (err=%v)", before, err)
+	}
+
+	// Re-triggering the SAME batch on an already-open campaign must stay a
+	// genuine no-op: no second campaign entry, and affectedCount must be 0.
+	out, err := s.TriggerRecall(ctx, "BATCH-IDEM", "second trigger, should be a no-op")
+	if err != nil {
+		t.Fatalf("second TriggerRecall failed: %v", err)
+	}
+	if !strings.Contains(out, `"affectedCount":0`) {
+		t.Fatalf("re-triggering an already-open campaign for the same batch should report affectedCount:0, got: %s", out)
+	}
+	after, err := s.mustGetToken(ctx, "COMP-IDEM1")
+	if err != nil || len(after.RecallCampaigns) != 1 {
+		t.Fatalf("re-triggering the same batch must not duplicate the campaign entry, got %+v (err=%v)", after, err)
+	}
+	if after.RecallCampaigns[0].Reason != "first trigger" {
+		t.Fatalf("idempotent re-trigger must not overwrite the original campaign's Reason, got %q", after.RecallCampaigns[0].Reason)
 	}
 }
 
@@ -880,7 +931,7 @@ func TestCloseRecall_RejectsUnauthorisedCaller(t *testing.T) {
 	}
 	// An ordinary enrolled participant with no OEM/Regulator role must not
 	// be able to resolve a safety recall.
-	_, err := s.CloseRecall(tier1Ctx, "COMP-AUTH8", "REPAIRED", "fixed", "Org1MSP")
+	_, err := s.CloseRecall(tier1Ctx, "COMP-AUTH8", "BATCH-AUTH8", "REPAIRED", "fixed", "Org1MSP")
 	if err == nil {
 		t.Fatalf("CloseRecall from a non-OEM/Regulator caller should be rejected, got nil error")
 	}
@@ -1064,7 +1115,7 @@ func TestSafetyCriticalFunctions_RejectOrdinaryClientWithinAuthorisedMSP(t *test
 	if _, err := s.TriggerRecall(adminCtx, "BATCH-ROLE", "admin recall"); err != nil {
 		t.Fatalf("admin TriggerRecall failed: %v", err)
 	}
-	if _, err := s.CloseRecall(clientCtx, "COMP-ROLE1", "REPAIRED", "ordinary client", "Org2MSP"); err == nil || !strings.Contains(err.Error(), "OU=admin") {
+	if _, err := s.CloseRecall(clientCtx, "COMP-ROLE1", "BATCH-ROLE", "REPAIRED", "ordinary client", "Org2MSP"); err == nil || !strings.Contains(err.Error(), "OU=admin") {
 		t.Fatalf("ordinary OEM client should be rejected from CloseRecall, got: %v", err)
 	}
 	if _, err := s.ReviseRecallReason(clientCtx, "BATCH-ROLE", "ordinary client amendment"); err == nil || !strings.Contains(err.Error(), "OU=admin") {
@@ -1154,6 +1205,170 @@ func TestMustGetToken_LegacyOwnerAlreadyOverwrittenCannotRecoverUsableCustodian(
 	}
 }
 
+func TestCloseRecall_ResolvesOneCampaignWithoutTouchingAnotherOpenOne(t *testing.T) {
+	s := &SmartContract{}
+	stub := newFakeStub("tx1")
+	ctx := &fakeCtx{stub: stub, callerID: oemOrgMSP}
+	regCtx := &fakeCtx{stub: stub, callerID: regulatorOrgMSP}
+
+	shipComponent(t, s, ctx, "COMP-CL1", "BATCH-CL-X")
+	shipComponent(t, s, ctx, "COMP-CL2", "BATCH-CL-Y")
+	if err := s.RecordAssembly(ctx, "PRODUCT-CL", "COMP-CL1,COMP-CL2", "RECIPE-CL", "Org2MSP"); err != nil {
+		t.Fatalf("setup RecordAssembly failed: %v", err)
+	}
+	if _, err := s.TriggerRecall(ctx, "BATCH-CL-X", "defect X"); err != nil {
+		t.Fatalf("setup TriggerRecall(BATCH-CL-X) failed: %v", err)
+	}
+	if _, err := s.TriggerRecall(ctx, "BATCH-CL-Y", "defect Y"); err != nil {
+		t.Fatalf("setup TriggerRecall(BATCH-CL-Y) failed: %v", err)
+	}
+
+	// Close only the BATCH-CL-X campaign on the product.
+	if _, err := s.CloseRecall(regCtx, "PRODUCT-CL", "BATCH-CL-X", "REPAIRED", "fixed X", "Org1MSP"); err != nil {
+		t.Fatalf("CloseRecall(BATCH-CL-X) failed: %v", err)
+	}
+	product, err := s.mustGetToken(ctx, "PRODUCT-CL")
+	if err != nil {
+		t.Fatalf("failed to read back product: %v", err)
+	}
+	xCampaign := recallCampaignByBatch(product, "BATCH-CL-X")
+	if xCampaign == nil || xCampaign.Status != "REPAIRED" {
+		t.Fatalf("expected BATCH-CL-X campaign resolved to REPAIRED, got %+v", xCampaign)
+	}
+	if openCampaignFor(product, "BATCH-CL-Y") == nil {
+		t.Fatalf("closing BATCH-CL-X must not affect the still-open BATCH-CL-Y campaign")
+	}
+	if product.RecallStatus != "RECALLED" {
+		t.Fatalf("RecallStatus = %q, want RECALLED while BATCH-CL-Y remains open", product.RecallStatus)
+	}
+
+	// Closing a batch with no open campaign on this token must be rejected,
+	// not silently accepted.
+	if _, err := s.CloseRecall(regCtx, "PRODUCT-CL", "BATCH-CL-X", "REPAIRED", "double close", "Org1MSP"); err == nil {
+		t.Fatalf("closing an already-resolved campaign again should be rejected, got nil error")
+	}
+
+	// Closing the second campaign clears the derived RecallStatus.
+	if _, err := s.CloseRecall(regCtx, "PRODUCT-CL", "BATCH-CL-Y", "RETIRED", "retired Y", "Org1MSP"); err != nil {
+		t.Fatalf("CloseRecall(BATCH-CL-Y) failed: %v", err)
+	}
+	product, err = s.mustGetToken(ctx, "PRODUCT-CL")
+	if err != nil || product.RecallStatus != "" {
+		t.Fatalf("RecallStatus = %q, want cleared once both campaigns are resolved (err=%v)", product.RecallStatus, err)
+	}
+}
+
+// recallCampaignByBatch finds a token's campaign for batchID regardless of
+// its Status (open or resolved), unlike openCampaignFor which only returns
+// a currently-open one. Test-only helper.
+func recallCampaignByBatch(token *ComponentToken, batchID string) *RecallCampaign {
+	for i := range token.RecallCampaigns {
+		if token.RecallCampaigns[i].BatchID == batchID {
+			return &token.RecallCampaigns[i]
+		}
+	}
+	return nil
+}
+
+func TestMustGetToken_RecoversLegacyRecallAsCampaign(t *testing.T) {
+	s := &SmartContract{}
+	stub := newFakeStub("tx1")
+	regCtx := &fakeCtx{stub: stub, callerID: regulatorOrgMSP}
+
+	// Simulate a genuine pre-v3.5 record: recalled while the chaincode
+	// still stored a single scalar recallBatchId/reason/reasonHistory set,
+	// with no recallCampaigns key at all.
+	legacyJSON := `{"docType":"component","tokenId":"LEGACY-RECALL-1","batchId":"BATCH-LEGACY-RC","status":"DELIVERED","recallStatus":"RECALLED","recallBatchId":"BATCH-LEGACY-RC","reason":"legacy defect","reasonHistory":["legacy note"],"custodianMsp":"Org1MSP","submittingOrgMspId":"Org1MSP","coAttestingOrgs":["Org1MSP","Org2MSP"]}`
+	stub.state["LEGACY-RECALL-1"] = []byte(legacyJSON)
+	// A real RegisterComponent call would also have added this batch~component
+	// index entry at the time; replicate it here since this record is
+	// injected directly rather than created through the normal call path.
+	if err := s.addToBatchIndex(regCtx, "BATCH-LEGACY-RC", "LEGACY-RECALL-1"); err != nil {
+		t.Fatalf("setup addToBatchIndex failed: %v", err)
+	}
+
+	tok, err := s.mustGetToken(regCtx, "LEGACY-RECALL-1")
+	if err != nil {
+		t.Fatalf("failed to read legacy record: %v", err)
+	}
+	campaign := openCampaignFor(tok, "BATCH-LEGACY-RC")
+	if campaign == nil {
+		t.Fatalf("expected mustGetToken to synthesise an open RecallCampaign from the legacy scalar fields, got RecallCampaigns: %+v", tok.RecallCampaigns)
+	}
+	if campaign.Reason != "legacy defect" || len(campaign.ReasonHistory) != 1 || campaign.ReasonHistory[0] != "legacy note" {
+		t.Fatalf("synthesised campaign did not carry over the legacy Reason/ReasonHistory correctly, got %+v", campaign)
+	}
+	// Confirm this recovery is actually usable: RevokeRecall against the
+	// synthesised campaign must work exactly as it would for a native
+	// v3.5 record, and the campaign persists forward on the ledger rather
+	// than staying a read-time-only artefact (unlike the CustodianMSP
+	// legacy fallback).
+	if _, err := s.RevokeRecall(regCtx, "BATCH-LEGACY-RC", "resolved via v3.5 tooling"); err != nil {
+		t.Fatalf("RevokeRecall on a recovered legacy campaign should succeed, got: %v", err)
+	}
+	after, err := s.mustGetToken(regCtx, "LEGACY-RECALL-1")
+	if err != nil || after.RecallStatus != "" {
+		t.Fatalf("RecallStatus = %q, want cleared after revoking the recovered legacy campaign (err=%v)", after.RecallStatus, err)
+	}
+}
+
+// --- architecture genericity: CustodianMSP/knownOrgMSPs is not hardcoded to
+// OEM/Tier-1/Regulator. This directly answers the supervisor's second
+// review point about the dealer/service-centre identity gap: it does not
+// close that gap (no dealer org is actually deployed on the evaluated
+// network -- see Limitations), but it demonstrates that closing it would
+// require deploying a real MSP on the network, not modifying this
+// chaincode. ---
+
+func TestCustodianMechanism_GenericToAnyDeployedMSPNotHardcodedToThreeOrgs(t *testing.T) {
+	s := &SmartContract{}
+	stub := newFakeStub("tx1")
+
+	// Temporarily add a fourth MSP to prove the mechanism is generic, not
+	// hardcoded to the three organisations actually deployed on this
+	// network. Restored at the end so no other test observes this change.
+	originalKnownOrgs := knownOrgMSPs
+	const dealerOrgMSP = "DealerMSP"
+	knownOrgMSPs = append(append([]string{}, knownOrgMSPs...), dealerOrgMSP)
+	defer func() { knownOrgMSPs = originalKnownOrgs }()
+
+	// isKnownOrgMSP has no special case for OEM/Tier-1/Regulator: any name
+	// present in knownOrgMSPs passes. Prove this directly, the same
+	// function every caller-supplied org name (toOrg, CoAttestingOrgs) is
+	// checked against.
+	if !isKnownOrgMSP(dealerOrgMSP) {
+		t.Fatalf("isKnownOrgMSP(%q) = false after adding it to knownOrgMSPs; the mechanism should accept any configured MSP name", dealerOrgMSP)
+	}
+
+	// A component shipped directly to the hypothetical dealer org becomes
+	// its custodian exactly like any other known org, using the same
+	// RecordShipment path already exercised for OEM/Tier-1/Regulator --
+	// no chaincode change was needed to reach this point beyond the test's
+	// one-line addition to knownOrgMSPs.
+	shipCtx := &fakeCtx{stub: stub, callerID: oemOrgMSP}
+	if err := s.RegisterComponent(shipCtx, "COMP-GEN2", "BATCH-GEN2", "Tier2Supplier", reportHash("gen2"), "Org2MSP"); err != nil {
+		t.Fatalf("setup registration failed: %v", err)
+	}
+	if err := s.RecordTest(shipCtx, "COMP-GEN2", reportHash("gen2t"), "Org2MSP"); err != nil {
+		t.Fatalf("setup RecordTest failed: %v", err)
+	}
+	if err := s.RecordShipment(shipCtx, "COMP-GEN2", oemOrgMSP, dealerOrgMSP, "Org2MSP"); err != nil {
+		t.Fatalf("RecordShipment to the hypothetical DealerMSP should succeed once it is a known org, got: %v", err)
+	}
+	tok, err := s.mustGetToken(shipCtx, "COMP-GEN2")
+	if err != nil || tok.CustodianMSP != dealerOrgMSP {
+		t.Fatalf("CustodianMSP = %q, want %q -- the custody-transfer mechanism should work for any deployed MSP, not only the three actually configured on this test network (err=%v)", tok.CustodianMSP, dealerOrgMSP, err)
+	}
+
+	// And the authorisation check that follows custody works the same way
+	// too: a caller authenticated as the new org can now act as this
+	// token's custodian, exactly like OEM/Tier-1/Regulator today.
+	dealerCtx := &fakeCtx{stub: stub, callerID: dealerOrgMSP}
+	if err := s.AttachEvidence(dealerCtx, "COMP-GEN2", "EV-GEN2", "QUALITY_TEST_REPORT", reportHash("gen2 evidence"), dealerOrgMSP, "repo://gen2", "Org1MSP"); err != nil {
+		t.Fatalf("AttachEvidence by the new custodian org should succeed once RecordShipment names it CustodianMSP, got: %v", err)
+	}
+}
+
 func TestReviseRecallReason_DoesNotAmendTokenOwnedByDifferentBatch(t *testing.T) {
 	s := &SmartContract{}
 	stub := newFakeStub("tx1")
@@ -1168,8 +1383,9 @@ func TestReviseRecallReason_DoesNotAmendTokenOwnedByDifferentBatch(t *testing.T)
 		t.Fatalf("setup TriggerRecall(BATCH-RV-X) failed: %v", err)
 	}
 
-	// BATCH-RV-Y never actually owns the product's recall (it is still
-	// BATCH-RV-X's), so amending via BATCH-RV-Y must not touch it.
+	// BATCH-RV-Y was never triggered on this product at all (it is still
+	// only BATCH-RV-X's campaign), so amending via BATCH-RV-Y must not
+	// touch BATCH-RV-X's campaign history.
 	if _, err := s.ReviseRecallReason(ctx, "BATCH-RV-Y", "unrelated amendment"); err != nil {
 		t.Fatalf("ReviseRecallReason(BATCH-RV-Y) failed: %v", err)
 	}
@@ -1177,9 +1393,13 @@ func TestReviseRecallReason_DoesNotAmendTokenOwnedByDifferentBatch(t *testing.T)
 	if err != nil {
 		t.Fatalf("failed to read back product: %v", err)
 	}
-	for _, entry := range product.ReasonHistory {
+	campaign := openCampaignFor(product, "BATCH-RV-X")
+	if campaign == nil {
+		t.Fatalf("expected an open BATCH-RV-X campaign on the product")
+	}
+	for _, entry := range campaign.ReasonHistory {
 		if strings.Contains(entry, "unrelated amendment") {
-			t.Fatalf("ReviseRecallReason(BATCH-RV-Y) must not amend a product actually recalled under BATCH-RV-X, got ReasonHistory: %v", product.ReasonHistory)
+			t.Fatalf("ReviseRecallReason(BATCH-RV-Y) must not amend a product actually recalled under BATCH-RV-X, got ReasonHistory: %v", campaign.ReasonHistory)
 		}
 	}
 }
