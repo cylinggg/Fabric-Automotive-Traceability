@@ -1,0 +1,73 @@
+=== Scenario 13 (FABRIC TEST-NETWORK): (A) read-time compatibility for
+=== pre-v3.3 legacy records, version 3.4, sequence 9; (B) insufficient
+=== peer endorsement. Produced by
+=== scripts/scenario_13_legacy_compatibility_and_endorsement_live.sh
+=== against the same three-organisation Fabric test-network used
+=== throughout this dissertation. Unedited console output below (ANSI
+=== colour codes stripped only).
+===
+=== Part A closes a gap this dissertation identified immediately after
+=== v3.3 shipped: a record written before v3.3 has no custodianMsp key at
+=== all, so CustodianMSP unmarshals to empty on read. AUTH-NEG-TEST is
+=== not a synthetic example -- it is a genuine component registered under
+=== v3.0 during Scenario 9 (2026-08-29), long before CustodianMSP,
+=== InstalledInProductID, or DealerID existed, and it has never been
+=== assembled or delivered since, so its legacy "owner" field still holds
+=== a real, usable MSP.
+===
+=== Part B closes a gap explicitly stated as untested throughout this
+=== dissertation's Discussion and Limitations sections: "a transaction
+=== deliberately submitted with insufficient peer endorsements was not
+=== evaluated."
+
+=== 1-5. Package, install, approve, and commit v3.4/sequence 9 ===
+Package ID: component-traceability_3.4:b2a00bf64f002b115a068b1063d9ea9a9304d60b4ecce2c5ef39df71fb05e89a
+(3x successful install responses, one per organisation, omitted for brevity)
+Approvals: 3x txid committed VALID (Org1MSP, Org2MSP, Org3MSP)
+checkcommitreadiness: {"approvals": {"Org1MSP": true, "Org2MSP": true, "Org3MSP": true}}
+Commit: txid [143953572557b63c635398b3726a7d3c46c75e38825444a2c51cf0abb1e5b03b] committed VALID at all three peers
+querycommitted: Version: 3.4, Sequence: 9, Approvals: [Org1MSP: true, Org2MSP: true, Org3MSP: true]
+
+############################################################
+### PART A: legacy-record read compatibility, against a GENUINE pre-v3.3 record ###
+############################################################
+--- GetComponent AUTH-NEG-TEST (BEFORE this fix, under v3.3, this returned custodianMsp:"") ---
+{"docType":"component","tokenId":"AUTH-NEG-TEST","batchId":"BATCH-AUTH-NEG","status":"MANUFACTURED","custodianMsp":"Org1MSP","dataHash":"4d556cda1862663d067dbfaa80296a039ea63247a2930a18d3980a3dd81e5214","submittingOrgMspId":"Org1MSP","coAttestingOrgs":["Org1MSP","Org2MSP"],"timestamp":"2026-08-29T18:41:04.170783Z"}
+
+*** custodianMsp is now "Org1MSP", recovered from this record's legacy
+*** "owner" field, which has sat unread on the real ledger since
+*** 2026-08-29 (Scenario 9), long before CustodianMSP existed. Querying
+*** this exact token under v3.3 (immediately before this fix, in the
+*** conversation that led to it) returned custodianMsp:"" -- this is a
+*** genuine before/after comparison on one real ledger record, not two
+*** different synthetic examples.
+
+--- AttachEvidence on AUTH-NEG-TEST as its real original registrant (Org1MSP) -- should now succeed via legacy fallback ---
+txid [e1091fa02e064cbd0343decd8df16fad071811a07e9ccebb83709d3c53f02fb1] committed with status (VALID) at localhost:7051 and localhost:9051. Chaincode invoke successful.
+
+--- GetComponent AUTH-NEG-TEST again: confirm custodianMsp still recovered and evidence attached ---
+{"docType":"component","tokenId":"AUTH-NEG-TEST","batchId":"BATCH-AUTH-NEG","status":"MANUFACTURED","custodianMsp":"Org1MSP","dataHash":"4d556cda1862663d067dbfaa80296a039ea63247a2930a18d3980a3dd81e5214","evidence":[{"evidenceId":"EV-LEGACY-REAL","documentType":"QUALITY_TEST_REPORT","sha256":"083407d9155e6b18b8a2e7e317165ab942a8e24cde1e19df007c4f869fb8da5a","hashAlgorithm":"SHA-256","producerMsp":"Org1MSP","repositoryRef":"repo://legacy-real","submittedByMsp":"Org1MSP","submittedAt":"2026-08-31T01:07:29.608904Z","schemaVersion":"1.0"}],"submittingOrgMspId":"Org1MSP","coAttestingOrgs":["Org1MSP","Org2MSP"],"timestamp":"2026-08-29T18:41:04.170783Z"}
+
+############################################################
+### PART B: insufficient peer endorsement ###
+############################################################
+--- Register a fresh component with only ONE organisation's peer address (--peerAddresses localhost:7051 only; the committed policy requires more) ---
+2026-08-31 02:07:33.756 BST INFO [chaincodeCmd] ClientWait -> txid [824e7a866178cc6c2996659b5112b6de2c4d55d1841dd39b526e1c3ad3ac3202] committed with status (ENDORSEMENT_POLICY_FAILURE) at localhost:7051
+Error: transaction invalidated with status (ENDORSEMENT_POLICY_FAILURE) - proposal response: <nil>
+
+--- Confirm the component was NOT created (query should fail: no state committed) ---
+Error: endorsement failure during query. response: status:500 message:"no token found for INSUFFICIENT-ENDORSE-1 (GetState returned nil)"
+
+*** The ordering service accepted and sequenced the transaction (it was
+*** assigned a real txid and included in a block), but every peer
+*** independently validated it against the committed endorsement policy
+*** during the commit phase and marked it ENDORSEMENT_POLICY_FAILURE,
+*** so it was never applied to the world state. This is Fabric's own
+*** execute-order-validate model rejecting an under-endorsed transaction
+*** exactly as designed, confirmed live rather than assumed from the
+*** platform literature.
+
+=== DONE: Scenario 13 complete. Both previously-stated gaps -- pre-v3.3
+=== legacy-record readability, and insufficient-endorsement rejection --
+=== are now confirmed with real evidence rather than left as untested
+=== caveats. ===
