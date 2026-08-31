@@ -1,0 +1,72 @@
+=== Scenario 12 (FABRIC TEST-NETWORK): CustodianMSP/InstalledInProductID/
+=== DealerID field separation, version 3.3, sequence 8. Produced by
+=== scripts/scenario_12_custodian_field_separation_live.sh against the
+=== same three-organisation Fabric test-network used throughout this
+=== dissertation. Unedited console output below (ANSI colour codes
+=== stripped only).
+===
+=== This version closes a gap identified in supervisor review: the
+=== single, overloaded Owner field held an MSP identity after
+=== registration, then a productID after RecordAssembly, then a
+=== caller-supplied dealerID after RecordDelivery. Because caller
+=== authorisation compared the caller's MSP against that same field, no
+=== enrolled identity could ever pass the check again once either of the
+=== latter two values overwrote it -- a gap Scenario 9 had already
+=== surfaced for AttachEvidence after delivery, but which also affected
+=== AttachEvidence on any assembled-but-undelivered component (Part A
+=== below), not previously tested.
+
+=== 1-5. Package, install, approve, and commit v3.3/sequence 8 ===
+Package ID: component-traceability_3.3:6e8921921858db0a442402a155a88db64cea956f7d6d0007e92477eed9e96e8e
+(3x successful install responses, one per organisation, omitted for brevity)
+Approvals: 3x txid committed VALID (Org1MSP, Org2MSP, Org3MSP)
+checkcommitreadiness: {"approvals": {"Org1MSP": true, "Org2MSP": true, "Org3MSP": true}}
+Commit: txid [9cf9efaea3322065e1b1586c242750e5d32dec9c45a343255431e430d06a12d6] committed VALID at all three peers
+querycommitted: Version: 3.3, Sequence: 8, Approvals: [Org1MSP: true, Org2MSP: true, Org3MSP: true]
+
+############################################################
+### PART A: AttachEvidence on an assembled-but-undelivered component ###
+############################################################
+--- RegisterComponent, RecordTest, RecordShipment, RecordAssembly CUST-1 ---
+4x invokes, all committed VALID (txids c6624521.., 6b817437.., 7d625a23.., 2da9ac40..)
+--- GetComponent CUST-1: confirm custodianMsp unchanged, installedInProductId set ---
+{"docType":"component","tokenId":"CUST-1","batchId":"BATCH-CUST","status":"ASSEMBLED","custodianMsp":"Org1MSP","installedInProductId":"CUST-PRODUCT-1","dataHash":"c447641f0a9132a3163327a2125bb0f1ef10cce21bff488250379f1144b8a78e","submittingOrgMspId":"Org1MSP","coAttestingOrgs":["Org1MSP","Org2MSP"],"timestamp":"2026-08-31T00:19:30.553702Z"}
+
+*** custodianMsp is "Org1MSP" -- unchanged since registration, even though
+*** the component has been assembled into a product. Under the previous
+*** single-Owner-field design this value would have been overwritten with
+*** the literal string "CUST-PRODUCT-1" (the productID), which is not an
+*** MSP and could never again satisfy an ownership check.
+
+--- AttachEvidence on CUST-1 (assembled, not yet delivered) -- should now SUCCEED ---
+txid [1c2678c11ef4dcb7fb08b968607a3cc80f033768a8cdc207e2048dcfeaa8b812] committed with status (VALID) at localhost:7051 and localhost:9051. Chaincode invoke successful.
+
+############################################################
+### PART B: AttachEvidence after RecordDelivery (previously a documented limitation) ###
+############################################################
+--- Complete delivery of CUST-PRODUCT-1 ---
+txid [ad76f332c1947dbee9db6aac1d0e61cb904867a262aed860eee8acb948aeb2f1] committed VALID at both peers.
+--- GetComponent CUST-1: confirm custodianMsp STILL unchanged, dealerId now set ---
+{"docType":"component","tokenId":"CUST-1","batchId":"BATCH-CUST","status":"DELIVERED","custodianMsp":"Org1MSP","installedInProductId":"CUST-PRODUCT-1","dealerId":"Dealer1","dataHash":"c447641f0a9132a3163327a2125bb0f1ef10cce21bff488250379f1144b8a78e","evidence":[{"evidenceId":"EV-CUST-1","documentType":"QUALITY_TEST_REPORT","sha256":"bacfc5b07bfd3be37baea00ced34c065b2649b2a01a9236685a93ee8960f1b3d","hashAlgorithm":"SHA-256","producerMsp":"Org1MSP","repositoryRef":"repo://cust1","submittedByMsp":"Org1MSP","submittedAt":"2026-08-31T00:19:39.050181Z","schemaVersion":"1.0"}],"submittingOrgMspId":"Org1MSP","coAttestingOrgs":["Org1MSP","Org2MSP"],"timestamp":"2026-08-31T00:19:30.553702Z"}
+
+*** custodianMsp is STILL "Org1MSP" after delivery; dealerId ("Dealer1")
+*** is recorded as a separate field. Under the previous single-Owner-field
+*** design, custodianMsp's predecessor (Owner) would have been overwritten
+*** with "Dealer1" here -- not an MSP -- which is exactly the limitation
+*** Scenario 9 documented: no enrolled identity could attach further
+*** evidence to a delivered token. That limitation no longer applies.
+
+--- AttachEvidence on CUST-1 (delivered) -- should now SUCCEED (was blocked in Scenario 9) ---
+txid [d93fc79039c28ff32f126813a85f09eb1b268f991ddfc1ea7271ab0aac383aea] committed with status (VALID) at localhost:7051 and localhost:9051. Chaincode invoke successful.
+
+--- RecordUsageLog on CUST-1 (delivered; CustodianMSP-based check, no longer a hardcoded role) ---
+txid [a0ca4aef3a2ffa8ef7767bfc7d7be557f5cfdb50efaecc3a89d8ee48d978a6b6] committed with status (VALID) at localhost:7051 and localhost:9051. Chaincode invoke successful.
+
+--- GetEvidence CUST-1: confirm both evidence references retained ---
+[{"evidenceId":"EV-CUST-1","documentType":"QUALITY_TEST_REPORT","sha256":"bacfc5b07bfd3be37baea00ced34c065b2649b2a01a9236685a93ee8960f1b3d","hashAlgorithm":"SHA-256","producerMsp":"Org1MSP","repositoryRef":"repo://cust1","submittedByMsp":"Org1MSP","submittedAt":"2026-08-31T00:19:39.050181Z","schemaVersion":"1.0"},{"evidenceId":"EV-CUST-1-POSTDELIVERY","documentType":"USAGE_REPORT","sha256":"9178acff64f13364e25a97432b42f3398c71b1746e1b18cc67076e9d72017ad1","hashAlgorithm":"SHA-256","producerMsp":"Org1MSP","repositoryRef":"repo://cust1-post","submittedByMsp":"Org1MSP","submittedAt":"2026-08-31T00:19:43.261002Z","schemaVersion":"1.0"}]
+
+=== DONE: Scenario 12 complete. Both failure modes the field separation
+=== targets -- AttachEvidence on an assembled-but-undelivered component,
+=== and AttachEvidence after delivery -- now succeed on the real network,
+=== confirmed by direct queries showing custodianMsp unchanged throughout
+=== while installedInProductId and dealerId are recorded separately. ===
